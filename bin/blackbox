@@ -1,0 +1,523 @@
+#!/usr/bin/env python3
+"""blackbox — flight recorder + rescue for Claude Code sessions.
+
+Claude Code already records every session to a transcript and can rebuild a
+session from it (`claude --resume`). What it does not do is notice death: a
+session killed by a crash, a quit, or a closed terminal looks identical on disk
+to one that ended cleanly, and if the session ran under a non-default
+CLAUDE_CONFIG_DIR its transcript is not even in the place `--resume` looks by
+default. blackbox closes exactly that gap — a marker per live session, removed
+on clean exit, so anything left behind is a crash with a known cwd, config dir,
+and resume command.
+
+Wired in as three hooks (see install.sh):
+  SessionStart -> blackbox hook start   register marker; warn if not recording
+  Stop         -> blackbox hook stop    heartbeat: stamp last completed turn
+  SessionEnd   -> blackbox hook end     clean exit: remove marker
+
+Commands:
+  blackbox list [--json]   crashed sessions (marker present, pid dead)
+  blackbox rescue          interactive picker; execs the resume in your shell
+  blackbox scan            registry-free sweep of every known storage root
+"""
+
+import json
+import os
+import sys
+import time
+import subprocess
+
+HOME = os.path.expanduser("~")
+STATE = os.path.join(HOME, ".blackbox")
+LIVE = os.path.join(STATE, "live")
+ROOTS = os.path.join(STATE, "roots.json")
+
+# Session-identity markers inherited from a parent Claude session. Any of these
+# means this session believes it is a child and has switched transcript saving
+# OFF — the one state blackbox cannot rescue, only shout about. (A real machine
+# lost four day-long conversations to exactly this on 2026-08-06.)
+SAVING_OFF_VARS = ["CLAUDE_CODE_CHILD_SESSION"]
+
+
+# --- tiny utils --------------------------------------------------------------
+
+def _read_stdin_json():
+    try:
+        return json.load(sys.stdin)
+    except Exception:
+        return {}
+
+
+def _config_dir():
+    return os.environ.get("CLAUDE_CONFIG_DIR", os.path.join(HOME, ".claude"))
+
+
+def _alive(pid):
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _git_branch(cwd):
+    try:
+        out = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=2,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _remember_root(root):
+    """Track every CLAUDE_CONFIG_DIR ever seen, so scan/list can search them all."""
+    roots = []
+    try:
+        roots = json.load(open(ROOTS))
+    except Exception:
+        pass
+    if root not in roots:
+        roots.append(root)
+        try:
+            os.makedirs(STATE, exist_ok=True)
+            json.dump(roots, open(ROOTS, "w"))
+        except Exception:
+            pass
+    return roots
+
+
+def _all_roots():
+    roots = [os.path.join(HOME, ".claude")]
+    try:
+        for r in json.load(open(ROOTS)):
+            if r not in roots:
+                roots.append(r)
+    except Exception:
+        pass
+    return [r for r in roots if os.path.isdir(os.path.join(r, "projects"))] or roots
+
+
+def _preview(transcript_path, tail_bytes=2_000_000):
+    """Last human prompt and last assistant text from a transcript.
+
+    Wrapper records (command output, system reminders, observation wrappers) all
+    open with '<'; a person's prompt almost never does. Falls back to a
+    full-file scan when the tail is all tool traffic.
+    """
+    def scan(data):
+        u = a = ""
+        for line in data.split("\n"):
+            if not line.strip():
+                continue
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if d.get("isMeta"):
+                continue
+            m = d.get("message") or {}
+            c = m.get("content")
+            texts = []
+            if isinstance(c, str):
+                texts = [c]
+            elif isinstance(c, list):
+                texts = [b.get("text", "") for b in c
+                         if isinstance(b, dict) and b.get("type") == "text"]
+            for txt in texts:
+                t = txt.strip()
+                if not t or t.startswith("<") or t.startswith("Caveat:"):
+                    continue
+                if d.get("type") == "user":
+                    u = t
+                elif d.get("type") == "assistant":
+                    a = t
+        return u, a
+
+    try:
+        size = os.path.getsize(transcript_path)
+        with open(transcript_path, "rb") as f:
+            f.seek(max(0, size - tail_bytes))
+            u, a = scan(f.read().decode("utf-8", "ignore"))
+        if not (u or a) and size > tail_bytes:
+            u, a = scan(open(transcript_path, encoding="utf-8", errors="ignore").read())
+        return u.replace("\n", " ")[:160], a.replace("\n", " ")[:160]
+    except Exception:
+        return "", ""
+
+
+def _classify(transcript_path):
+    """'ok' — real conversation records; 'skeleton' — sidecar metadata only;
+    'missing' — no file.
+
+    A session with transcript saving disabled still writes a file — but it holds
+    only last-prompt stubs, ai-title, mode records. Resuming it restores an
+    almost-empty conversation, so offering `--resume` for one is a false
+    promise; it gets salvage instead.
+    """
+    if not transcript_path or not os.path.exists(transcript_path):
+        return "missing"
+    meta_only = False
+    try:
+        with open(transcript_path, errors="ignore") as f:
+            for line in f:
+                if '"type":"user"' in line or '"type":"assistant"' in line:
+                    return "ok"
+                if '"type":"last-prompt"' in line or '"type":"ai-title"' in line:
+                    meta_only = True
+    except Exception:
+        pass
+    # A file with neither messages nor metadata has nothing to offer either way.
+    return "skeleton" if meta_only else "missing"
+
+
+def _salvage(transcript_path):
+    """Extract whatever a skeleton still holds: the title and the ordered
+    prompt stubs (~200 chars each). Not the conversation — its outline; enough
+    to re-seed a new session with what was being worked on."""
+    title = ""
+    prompts = []
+    try:
+        with open(transcript_path, errors="ignore") as f:
+            for line in f:
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                if d.get("type") == "ai-title":
+                    title = d.get("aiTitle", title)
+                elif d.get("type") == "last-prompt":
+                    p = d.get("lastPrompt", "").strip()
+                    # Teammate/system relays are machinery, not the person's prompts.
+                    if p.startswith("Another Claude session sent"):
+                        continue
+                    if p and (not prompts or prompts[-1] != p):
+                        prompts.append(p)
+    except Exception:
+        pass
+    return title, prompts
+
+
+def cmd_salvage(target):
+    # Accept a path or a bare session id searched across every known root.
+    path = target if os.path.exists(target) else None
+    if not path:
+        for root in _all_roots():
+            for proj in os.listdir(os.path.join(root, "projects")):
+                p = os.path.join(root, "projects", proj, target + ".jsonl")
+                if os.path.exists(p):
+                    path = p
+                    break
+            if path:
+                break
+    if not path:
+        print(f"blackbox: no transcript found for {target!r}")
+        return
+    title, prompts = _salvage(path)
+    if not (title or prompts):
+        print("blackbox: nothing salvageable in that transcript.")
+        return
+    os.makedirs(os.path.join(STATE, "salvage"), exist_ok=True)
+    sid = os.path.basename(path)[:-6]
+    out = os.path.join(STATE, "salvage", sid + ".md")
+    with open(out, "w") as f:
+        f.write(f"# Salvage: {title or sid}\n\n")
+        f.write("The conversation itself was never saved (transcript saving was off).\n")
+        f.write("These are the prompts that drove it, in order, truncated at ~200\n")
+        f.write("chars each — the outline of the work, for re-seeding a new session.\n\n")
+        for i, p in enumerate(prompts, 1):
+            f.write(f"{i}. {p}\n\n")
+    print(f"salvaged {len(prompts)} prompt(s)" + (f' · title: "{title}"' if title else ""))
+    print(out)
+
+
+def _fmt_age(sec):
+    sec = int(max(0, sec))
+    if sec < 3600:
+        return f"{sec // 60}m ago"
+    if sec < 86400:
+        return f"{sec // 3600}h {sec % 3600 // 60}m ago"
+    return f"{sec // 86400}d {sec % 86400 // 3600}h ago"
+
+
+def _resume_cmd(mark):
+    """The exact incantation that brings this session back."""
+    parts = []
+    cd = mark.get("config_dir", "")
+    if cd and os.path.realpath(cd) != os.path.realpath(os.path.join(HOME, ".claude")):
+        parts.append(f'CLAUDE_CONFIG_DIR="{cd}"')
+    parts += ["claude", "--resume", mark["session_id"]]
+    return f'cd "{mark.get("cwd", ".")}" && ' + " ".join(parts)
+
+
+# --- hooks -------------------------------------------------------------------
+
+def hook_start():
+    d = _read_stdin_json()
+    sid = d.get("session_id", "")
+    if not sid:
+        return
+    os.makedirs(LIVE, exist_ok=True)
+    cwd = d.get("cwd") or os.getcwd()
+    cfg = _config_dir()
+    _remember_root(cfg)
+    mark = {
+        "session_id": sid,
+        "cwd": cwd,
+        "branch": _git_branch(cwd),
+        # The hook runs as a child of the claude process itself.
+        "pid": os.getppid(),
+        "transcript_path": d.get("transcript_path", ""),
+        "config_dir": cfg,
+        "started_at": time.time(),
+        "last_turn": time.time(),
+    }
+    with open(os.path.join(LIVE, sid + ".json"), "w") as f:
+        json.dump(mark, f)
+
+    # The guard. Saving-off is the ONE unrecoverable state, so it must not pass
+    # silently — but the env marker alone is NOT proof: a headless child can
+    # carry CLAUDE_CODE_CHILD_SESSION and still save fine (verified 2026-08-07).
+    # So: loud only on the definite signal (no transcript path at all); a
+    # one-line note on the ambiguous one. The Stop hook then verifies against
+    # the actual file after the first completed turn, which is ground truth.
+    marker_vars = [v for v in SAVING_OFF_VARS if os.environ.get(v)]
+    if not d.get("transcript_path"):
+        print(
+            "⚠️ BLACKBOX WARNING — TELL THE USER THIS VERBATIM, BEFORE ANYTHING ELSE:\n"
+            "This session reported NO transcript path — it is not saving. If it "
+            "crashes or is closed, the ENTIRE conversation is unrecoverable. "
+            "To fix: exit now and restart claude from a clean shell "
+            "(e.g. `env -u CLAUDE_CODE_CHILD_SESSION claude`)."
+        )
+    elif marker_vars:
+        print(
+            f"blackbox: note — {', '.join(marker_vars)} is set, which can disable "
+            "transcript saving. Verified against the actual file after your first "
+            "turn; a warning follows only if it is really not saving."
+        )
+
+
+def hook_stop():
+    d = _read_stdin_json()
+    sid = d.get("session_id", "")
+    p = os.path.join(LIVE, sid + ".json")
+    try:
+        mark = json.load(open(p))
+        mark["last_turn"] = time.time()
+        if d.get("transcript_path"):
+            mark["transcript_path"] = d["transcript_path"]
+        # Ground truth: after a completed turn, a saving session's transcript
+        # holds real message records. A skeleton or missing file here means the
+        # session is burning unrecoverable context RIGHT NOW — flagged so
+        # `blackbox list` shows it while there is still time to act.
+        kind = _classify(mark.get("transcript_path", ""))
+        if kind != "ok":
+            mark["hazard"] = "not saving — a completed turn produced no conversation records"
+        else:
+            mark.pop("hazard", None)
+        with open(p, "w") as f:
+            json.dump(mark, f)
+    except Exception:
+        pass
+
+
+def hook_end():
+    d = _read_stdin_json()
+    sid = d.get("session_id", "")
+    try:
+        os.unlink(os.path.join(LIVE, sid + ".json"))
+    except OSError:
+        pass
+
+
+# --- queries -----------------------------------------------------------------
+
+def crashed_sessions():
+    out = []
+    if not os.path.isdir(LIVE):
+        return out
+    for f in os.listdir(LIVE):
+        if not f.endswith(".json"):
+            continue
+        try:
+            mark = json.load(open(os.path.join(LIVE, f)))
+        except Exception:
+            continue
+        if _alive(mark.get("pid")):
+            continue
+        tp = mark.get("transcript_path", "")
+        kind = _classify(tp)
+        if kind != "ok":
+            # Died without a real transcript — the guard's case. Reported, not
+            # hidden: silently dropping it would repeat the original disaster.
+            mark["unrecoverable"] = True
+            if kind == "skeleton":
+                mark["salvageable"] = True
+        u, a = _preview(tp) if kind == "ok" else ("", "")
+        mark["last_user"] = u
+        mark["last_assistant"] = a
+        if kind == "ok":
+            mark["resume"] = _resume_cmd(mark)
+        out.append(mark)
+    out.sort(key=lambda m: -m.get("last_turn", 0))
+    return out
+
+
+def live_at_risk():
+    """Sessions that are ALIVE but verifiably not saving — the disaster still
+    preventable. Four day-long sessions sat in exactly this state for hours on
+    2026-08-06 with nothing surfacing it."""
+    out = []
+    if not os.path.isdir(LIVE):
+        return out
+    for f in os.listdir(LIVE):
+        if not f.endswith(".json"):
+            continue
+        try:
+            mark = json.load(open(os.path.join(LIVE, f)))
+        except Exception:
+            continue
+        if mark.get("hazard") and _alive(mark.get("pid")):
+            out.append(mark)
+    return out
+
+
+def cmd_list(as_json=False):
+    crashed = crashed_sessions()
+    risky = live_at_risk()
+    if as_json:
+        print(json.dumps({"crashed": crashed, "live_at_risk": risky}, indent=2))
+        return
+    for m in risky:
+        proj = m.get("cwd", "?").replace(HOME, "~")
+        print(f"⚠ LIVE BUT NOT SAVING: {proj} — {m['hazard']}")
+        print("   Everything typed there is unrecoverable if it dies. Restart that session cleanly.")
+    if not crashed:
+        print("blackbox: no crashed sessions. (Live ones are fine; clean exits are cleaned up.)")
+        return
+    now = time.time()
+    for i, m in enumerate(crashed, 1):
+        proj = m.get("cwd", "?").replace(HOME, "~")
+        br = f" ({m['branch']})" if m.get("branch") else ""
+        print(f"\n[{i}] {proj}{br} — last active {_fmt_age(now - m.get('last_turn', now))}")
+        if m.get("unrecoverable"):
+            print("     ✗ UNRECOVERABLE — the conversation was never saved")
+            if m.get("salvageable"):
+                print(f"     partial: blackbox salvage {m['session_id']}   (title + prompt outline)")
+            continue
+        if m.get("last_user"):
+            print(f"     you : {m['last_user']}")
+        if m.get("last_assistant"):
+            print(f"     it  : {m['last_assistant']}")
+        print(f"     resume: {m['resume']}")
+
+
+def cmd_rescue():
+    crashed = [m for m in crashed_sessions() if not m.get("unrecoverable")]
+    if not crashed:
+        cmd_list()
+        return
+    cmd_list()
+    try:
+        pick = input("\nblackbox> resume which? [number, or enter to quit] ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if not pick.isdigit() or not (1 <= int(pick) <= len(crashed)):
+        return
+    m = crashed[int(pick) - 1]
+    # Marker is consumed on rescue: the resumed session registers a fresh one.
+    try:
+        os.unlink(os.path.join(LIVE, m["session_id"] + ".json"))
+    except OSError:
+        pass
+    env = dict(os.environ)
+    cd = m.get("config_dir", "")
+    if cd and os.path.realpath(cd) != os.path.realpath(os.path.join(HOME, ".claude")):
+        env["CLAUDE_CONFIG_DIR"] = cd
+    os.chdir(m.get("cwd", "."))
+    # Replace this process with the resumed session — the terminal becomes claude.
+    os.execvpe("claude", ["claude", "--resume", m["session_id"]], env)
+
+
+def cmd_scan():
+    """Registry-free sweep: newest transcripts in every storage root ever seen.
+
+    For sessions that predate blackbox (no marker), this is how you find what
+    exists at all — including per-profile roots that `claude --resume` alone
+    would never look in from a default shell.
+    """
+    now = time.time()
+    for root in _all_roots():
+        pdir = os.path.join(root, "projects")
+        if not os.path.isdir(pdir):
+            continue
+        rows = []
+        for proj in os.listdir(pdir):
+            full = os.path.join(pdir, proj)
+            if not os.path.isdir(full):
+                continue
+            for f in os.listdir(full):
+                if f.endswith(".jsonl"):
+                    p = os.path.join(full, f)
+                    try:
+                        st = os.stat(p)
+                    except OSError:
+                        continue
+                    if st.st_size > 50_000:
+                        rows.append((st.st_mtime, st.st_size, proj, f[:-6], p))
+        rows.sort(reverse=True)
+        label = root.replace(HOME, "~")
+        print(f"\n=== {label} — {len(rows)} substantive session(s) ===")
+        for mt, sz, proj, sid, p in rows[:12]:
+            kind = _classify(p)
+            print(f"  {_fmt_age(now - mt):>12}  {sz / 1e6:5.1f} MB  {proj}")
+            if kind != "ok":
+                print(f"                ✗ no conversation saved — try: blackbox salvage {sid}")
+                continue
+            u, _ = _preview(p, tail_bytes=300_000)
+            if u:
+                print(f"                you : {u[:120]}")
+            print(f"                resume: CLAUDE_CONFIG_DIR=\"{root}\" claude --resume {sid}"
+                  if root != os.path.join(HOME, ".claude")
+                  else f"                resume: claude --resume {sid}")
+
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        print(__doc__)
+        return
+    cmd = args[0]
+    if cmd == "hook":
+        # Hooks must NEVER break a session: any failure is swallowed.
+        try:
+            {"start": hook_start, "stop": hook_stop, "end": hook_end}[args[1]]()
+        except Exception:
+            pass
+    elif cmd == "list":
+        cmd_list(as_json="--json" in args)
+    elif cmd == "rescue":
+        cmd_rescue()
+    elif cmd == "scan":
+        cmd_scan()
+    elif cmd == "salvage" and len(args) > 1:
+        cmd_salvage(args[1])
+    elif cmd == "root" and len(args) > 1:
+        # Register a storage root by hand — for sessions that predate blackbox
+        # (hooks register roots automatically from then on).
+        r = os.path.abspath(os.path.expanduser(args[1]))
+        if os.path.isdir(os.path.join(r, "projects")):
+            _remember_root(r)
+            print(f"registered root: {r}")
+        else:
+            print(f"blackbox: {r} has no projects/ directory")
+    else:
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()
