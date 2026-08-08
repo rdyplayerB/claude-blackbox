@@ -40,10 +40,18 @@ and what this adds — is three small things:
 | Transcript saving can be silently OFF — the one unrecoverable state | SessionStart guard: an unmissable warning in the session, with the fix, before any work happens. |
 
 
+<p align="center">
+  <img src="assets/demo.gif" width="920"
+       alt="A real claude session is SIGKILLed mid-task, blackbox lists it with its last exchange and resume command, and the resumed session reports exactly how far it got: numbers 1 through 6.">
+</p>
+
 ## Sixty seconds of why
 
-A real session, really killed, really brought back — this is captured output,
-not a mock:
+The GIF above is scripted typing but unscripted reality — recorded with
+[vhs](https://github.com/charmbracelet/vhs) from `demo.tape`, so anyone can
+re-record it: a real session, a real SIGKILL, and a resumed session that
+answers *"I had completed numbers 1 through 6 when interrupted."* The same
+flow as text:
 
 ```console
 $ kill -9 <claude pid>          # the app crashed / the laptop died / you quit
