@@ -1,9 +1,27 @@
-# claude-blackbox
+```text
+  ╔════════════════════════════════════════════════════════════╗
+  ║                                                            ║
+  ║   ● REC                                     ▁▂▃▅▆▇▆▅▃▂▁    ║
+  ║                                                            ║
+  ║        C L A U D E ─ B L A C K B O X                       ║
+  ║        ═════════════════════════════                       ║
+  ║        FLIGHT RECORDER · CLAUDE CODE SESSIONS              ║
+  ║                                                            ║
+  ║   ▐█▌▐▌▐██▌▐▌▐▌▐███▌▐▌▐█▌▐▌▐▌▐██▌▐▌▐███▌▐▌▐▌▐█▌▐▌▐▌▐██▌   ║
+  ╚════════════════════════════════════════════════════════════╝
+```
 
-Flight recorder + rescue for Claude Code sessions.
+<p align="center"><i>Real flight recorders are painted orange so they can be
+found after the crash. This one is a JSON file — same reason.</i></p>
 
-> Memory plugins remember what you *learned*. blackbox remembers what you
-> were *doing* — and puts you back there.
+<p align="center">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
+  <img alt="claude code" src="https://img.shields.io/badge/Claude_Code-plugin-de7c00">
+  <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
+</p>
+
+> **Memory plugins remember what you *learned*. blackbox remembers what you
+> were *doing* — and puts you back there.**
 
 Born from a real loss: four day-long conversations died with an app quit on
 2026-08-06. Two turned out to be sitting on disk, findable but invisible —
@@ -20,6 +38,36 @@ and what this adds — is three small things:
 | Nothing notices death — a crash looks like a clean exit | Marker per live session (SessionStart), removed on clean exit (SessionEnd). A marker with a dead pid **is** a crash, with death context preserved. |
 | Sessions under non-default `CLAUDE_CONFIG_DIR` are invisible to a default `--resume` | Markers record the config dir; `resume` commands carry it. `scan` sweeps every root ever seen. |
 | Transcript saving can be silently OFF — the one unrecoverable state | SessionStart guard: an unmissable warning in the session, with the fix, before any work happens. |
+
+
+## Sixty seconds of why
+
+A real session, really killed, really brought back — this is captured output,
+not a mock:
+
+```console
+$ kill -9 <claude pid>          # the app crashed / the laptop died / you quit
+
+$ blackbox list
+
+[1] ~/work/api — last active 0m ago
+     you : Count to 30 slowly, one number per line, thinking carefully
+     resume: cd "~/work/api" && claude --resume 8e7b4680-7f19-40f5-9057-b488bf4b1a01
+
+$ claude --resume 8e7b4680-7f19-40f5-9057-b488bf4b1a01 \
+    -p "In one sentence: what were you doing when you were interrupted?"
+
+I had just been asked to count to 30 one number per line, but I was
+interrupted before outputting any numbers — so I'd be starting from 1.
+```
+
+The session lifecycle, whole:
+
+```text
+ start ──●────●────●────✕ crash            ●────●────▶ carries on
+         record   heartbeat        blackbox rescue
+         (marker) (verify saving)  (full memory intact)
+```
 
 ## Install
 
