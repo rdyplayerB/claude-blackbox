@@ -12,15 +12,18 @@ store transcripts in non-default roots), and last exchange known.
 
 ## Steps
 
-1. Run: `~/projects-b/blackbox/bin/blackbox list --json` — returns
+0. Locate the CLI — it records its own path on every run:
+   `BB="$(cat ~/.blackbox/bin-path 2>/dev/null)"`. If that file is missing,
+   fall back to `$CLAUDE_PLUGIN_ROOT/bin/blackbox`, then the newest
+   `~/.claude/plugins/cache/*/blackbox/*/bin/blackbox`.
+1. Run: `"$BB" list --json` — returns
    `{"crashed": [...], "live_at_risk": [...]}`.
 2. **`live_at_risk` first, always**: those sessions are running RIGHT NOW
    without saving anything — every word in them is lost if they die. Tell the
    user immediately and plainly; that loss is still preventable.
-3. If `crashed` is empty, say so — and offer
-   `~/projects-b/blackbox/bin/blackbox scan`, which sweeps every known storage
-   root for recent substantive sessions regardless of markers (covers crashes
-   from before blackbox was installed).
+3. If `crashed` is empty, say so — and offer `"$BB" scan`, which sweeps every
+   known storage root for recent substantive sessions regardless of markers
+   (covers crashes from before blackbox was installed).
 3. Otherwise, present each crashed session conversationally: project, branch,
    how long ago it was last active, and the last user/assistant exchange so
    the user can recognize the conversation.

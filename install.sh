@@ -52,6 +52,6 @@ if ! python3 -c "import json;json.load(open('$SETTINGS'))" 2>/dev/null; then
 fi
 
 mkdir -p "$HOME/.claude/skills"
-ln -sfn "$BB/skill" "$HOME/.claude/skills/rescue"
+ln -sfn "$BB/skills/rescue" "$HOME/.claude/skills/rescue"
 echo "linked /rescue skill"
 echo "blackbox installed. New sessions are now flight-recorded."

@@ -1,0 +1,21 @@
+{
+  "name": "blackbox",
+  "version": "1.0.0",
+  "description": "Flight recorder + rescue for Claude Code sessions — know when a session died, resume it with full context, and get warned the moment a live session isn't saving its transcript.",
+  "author": {
+    "name": "rdyplayerB"
+  },
+  "repository": "https://github.com/rdyplayerB/blackbox",
+  "license": "MIT",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "plugin",
+    "crash-recovery",
+    "session",
+    "resume",
+    "transcript",
+    "flight-recorder"
+  ],
+  "homepage": "https://github.com/rdyplayerB/blackbox#readme"
+}

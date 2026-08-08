@@ -486,7 +486,20 @@ def cmd_scan():
                   else f"                resume: claude --resume {sid}")
 
 
+def _drop_bin_path():
+    """Record where this binary lives, so the /rescue skill and the plugin's
+    hook commands can find it regardless of install method (plugin cache,
+    manual clone, moved directory) — the path is refreshed on every run."""
+    try:
+        os.makedirs(STATE, exist_ok=True)
+        with open(os.path.join(STATE, "bin-path"), "w") as f:
+            f.write(os.path.realpath(os.path.abspath(sys.argv[0])))
+    except Exception:
+        pass
+
+
 def main():
+    _drop_bin_path()
     args = sys.argv[1:]
     if not args:
         print(__doc__)

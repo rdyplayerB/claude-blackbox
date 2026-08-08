@@ -1,0 +1,41 @@
+{
+  "description": "blackbox flight recorder — register live sessions, heartbeat + verify saving, clean up on exit",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "_B=\"${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/bin/blackbox}\"; [ -x \"$_B\" ] || _B=\"$(cat \"$HOME/.blackbox/bin-path\" 2>/dev/null)\"; [ -x \"$_B\" ] || _B=\"$(ls -t \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"/plugins/cache/*/blackbox/*/bin/blackbox 2>/dev/null | head -1)\"; [ -x \"$_B\" ] && \"$_B\" hook start || true",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "_B=\"${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/bin/blackbox}\"; [ -x \"$_B\" ] || _B=\"$(cat \"$HOME/.blackbox/bin-path\" 2>/dev/null)\"; [ -x \"$_B\" ] || _B=\"$(ls -t \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"/plugins/cache/*/blackbox/*/bin/blackbox 2>/dev/null | head -1)\"; [ -x \"$_B\" ] && \"$_B\" hook stop || true",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "_B=\"${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/bin/blackbox}\"; [ -x \"$_B\" ] || _B=\"$(cat \"$HOME/.blackbox/bin-path\" 2>/dev/null)\"; [ -x \"$_B\" ] || _B=\"$(ls -t \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"/plugins/cache/*/blackbox/*/bin/blackbox 2>/dev/null | head -1)\"; [ -x \"$_B\" ] && \"$_B\" hook end || true",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

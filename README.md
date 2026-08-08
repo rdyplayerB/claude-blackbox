@@ -20,13 +20,32 @@ and what this adds — is three small things:
 
 ## Install
 
+**As a plugin** (the normal way — like claude-mem):
+
 ```
-~/projects-b/blackbox/install.sh
+/plugin marketplace add rdyplayerB/blackbox
+/plugin install blackbox@blackbox
+```
+
+That wires the three hooks and the `/rescue` skill automatically, and updates
+like any other plugin.
+
+**Or manually** (from a clone, no plugin system needed):
+
+```
+./install.sh
 ```
 
 Backs up `~/.claude/settings.json`, merges three hooks (validated, restored on
-failure), links the `/rescue` skill. Only new sessions are affected — running
-ones never re-read hooks. `uninstall.sh` reverses it.
+failure), links the `/rescue` skill. `uninstall.sh` reverses it.
+
+**Pick one, not both** — installing both ways runs every hook twice. Either is
+fine; the CLI records its own location (`~/.blackbox/bin-path`) on every run,
+so the skill and hooks find it regardless of which path you chose or where the
+clone lives.
+
+Either way, only *new* sessions are affected — running ones never re-read
+hooks.
 
 ## Use
 

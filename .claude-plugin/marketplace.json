@@ -1,0 +1,13 @@
+{
+  "name": "blackbox",
+  "owner": {
+    "name": "rdyplayerB"
+  },
+  "plugins": [
+    {
+      "name": "blackbox",
+      "source": "./",
+      "description": "Flight recorder + rescue for Claude Code sessions. Crashed sessions become resumable with one command; live sessions that aren't saving their transcript get flagged before the loss, not after."
+    }
+  ]
+}
