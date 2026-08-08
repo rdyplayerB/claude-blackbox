@@ -8,7 +8,8 @@
 # backup if the result does not parse.
 set -euo pipefail
 
-BB="$HOME/projects-b/blackbox"
+# Wherever this clone lives — the installer must work from any checkout path.
+BB="$(cd "$(dirname "$0")" && pwd)"
 SETTINGS="$HOME/.claude/settings.json"
 TS="$(date +%Y%m%d-%H%M%S)"
 BAK="$SETTINGS.bak-blackbox-$TS"
