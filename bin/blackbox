@@ -350,7 +350,36 @@ def hook_start():
 def hook_stop():
     d = _read_stdin_json()
     sid = d.get("session_id", "")
+    if not sid:
+        return
     p = os.path.join(LIVE, sid + ".json")
+    # Late registration. Claude Code dispatches hooks from CURRENT settings, so
+    # a session that predates install still fires Stop — meaning even sessions
+    # blackbox never saw start can be picked up mid-life on their next turn.
+    # Without this, "running sessions are unprotected until restarted" ; with
+    # it, they join the flight record the first time they finish a turn.
+    if not os.path.exists(p):
+        cwd = d.get("cwd") or os.getcwd()
+        _remember_root(_config_dir())
+        mark = {
+            "session_id": sid,
+            "cwd": cwd,
+            "branch": _git_branch(cwd),
+            "pid": os.getppid(),
+            "transcript_path": d.get("transcript_path", ""),
+            "config_dir": _config_dir(),
+            "started_at": time.time(),
+            "last_turn": time.time(),
+            "registered_late": True,
+        }
+        try:
+            os.makedirs(LIVE, exist_ok=True)
+            with open(p, "w") as f:
+                json.dump(mark, f)
+            _log("register.late", sid=sid[:8], cwd=cwd)
+        except Exception:
+            pass
+        return
     try:
         mark = json.load(open(p))
         mark["last_turn"] = time.time()
@@ -389,6 +418,18 @@ def hook_end():
 
 # --- queries -----------------------------------------------------------------
 
+def _is_machinery(cwd):
+    """Sessions run by tools, not people. Memory plugins (claude-mem) and other
+    machinery spawn their own Claude sessions from hidden directories; when a
+    tool kills its workers uncleanly they would flood the rescue list with
+    sessions no human was ever in. Hidden-path cwd is the generic tell."""
+    try:
+        rel = os.path.relpath(cwd, HOME)
+        return rel.split(os.sep)[0].startswith(".") and not rel.startswith("..")
+    except Exception:
+        return False
+
+
 def crashed_sessions():
     out = []
     if not os.path.isdir(LIVE):
@@ -410,6 +451,7 @@ def crashed_sessions():
             mark["unrecoverable"] = True
             if kind == "skeleton":
                 mark["salvageable"] = True
+        mark["machinery"] = _is_machinery(mark.get("cwd", ""))
         u, a = _preview(tp) if kind == "ok" else ("", "")
         mark["last_user"] = u
         mark["last_assistant"] = a
@@ -439,8 +481,11 @@ def live_at_risk():
     return out
 
 
-def cmd_list(as_json=False):
+def cmd_list(as_json=False, show_all=False):
     crashed = crashed_sessions()
+    machinery = [m for m in crashed if m.get("machinery")]
+    if not show_all:
+        crashed = [m for m in crashed if not m.get("machinery")]
     risky = live_at_risk()
     if as_json:
         print(json.dumps({"crashed": crashed, "live_at_risk": risky}, indent=2))
@@ -449,6 +494,8 @@ def cmd_list(as_json=False):
         proj = m.get("cwd", "?").replace(HOME, "~")
         print(f"⚠ LIVE BUT NOT SAVING: {proj} — {m['hazard']}")
         print("   Everything typed there is unrecoverable if it dies. Restart that session cleanly.")
+    if machinery and not show_all:
+        print(f"({len(machinery)} background tool session(s) hidden — plugins running their own claudes; --all shows them)")
     if not crashed:
         print("blackbox: no crashed sessions. (Live ones are fine; clean exits are cleaned up.)")
         return
@@ -470,7 +517,8 @@ def cmd_list(as_json=False):
 
 
 def cmd_rescue():
-    crashed = [m for m in crashed_sessions() if not m.get("unrecoverable")]
+    crashed = [m for m in crashed_sessions()
+               if not m.get("unrecoverable") and not m.get("machinery")]
     if not crashed:
         cmd_list()
         return
@@ -700,7 +748,7 @@ def main():
             _log("hook." + sub, ok=False, ms=round((time.time() - t0) * 1000, 1),
                  err=traceback.format_exc()[-1500:])
     elif cmd == "list":
-        cmd_list(as_json="--json" in args)
+        cmd_list(as_json="--json" in args, show_all="--all" in args)
     elif cmd == "rescue":
         cmd_rescue()
     elif cmd == "scan":
