@@ -2,6 +2,9 @@
 
 Flight recorder + rescue for Claude Code sessions.
 
+> Memory plugins remember what you *learned*. blackbox remembers what you
+> were *doing* — and puts you back there.
+
 Born from a real loss: four day-long conversations died with an app quit on
 2026-08-06. Two turned out to be sitting on disk, findable but invisible —
 saved under a per-profile `CLAUDE_CONFIG_DIR` that no default `--resume` would
@@ -56,7 +59,17 @@ blackbox rescue     # in a terminal: pick a session, it becomes that session
 /rescue             # inside any Claude session: list + copy-paste commands
 blackbox list       # just show what's rescuable
 blackbox scan       # no markers needed: sweep all storage roots (pre-install crashes)
+blackbox salvage <session-id>   # last resort for sessions that never saved
 ```
+
+**What salvage is (and isn't):** a session running with transcript saving
+disabled still writes a sidecar file — no conversation, just ~200-char stubs
+of each prompt you typed and an AI-generated title. `salvage` extracts that
+into a markdown outline for re-seeding a new session. It is the consolation
+prize, not a recovery: if salvage is ever your primary tool, the guard has
+already failed. It exists because it works *retroactively* — the guard can
+only protect sessions started after install, but salvage can still pull the
+outline out of losses that predate blackbox entirely.
 
 ## Knowing it's working
 
