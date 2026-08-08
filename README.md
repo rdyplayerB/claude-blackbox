@@ -45,32 +45,6 @@ and what this adds — is three small things:
        alt="A real claude session is SIGKILLed mid-task, blackbox lists it with its last exchange and resume command, and the resumed session reports exactly how far it got: numbers 1 through 6.">
 </p>
 
-## Sixty seconds of why
-
-The GIF above is scripted typing but unscripted reality — recorded with
-[vhs](https://github.com/charmbracelet/vhs) from `demo.tape`, so anyone can
-re-record it: a real session, a real SIGKILL, and a resumed session that
-answers *"I had completed numbers 1 through 6 when interrupted."* The same
-flow as text:
-
-```console
-$ kill -9 <claude pid>          # the app crashed / the laptop died / you quit
-
-$ blackbox list
-
-[1] ~/work/api — last active 0m ago
-     you : Count to 30 slowly, one number per line, thinking carefully
-     resume: cd "~/work/api" && claude --resume 8e7b4680-7f19-40f5-9057-b488bf4b1a01
-
-$ claude --resume 8e7b4680-7f19-40f5-9057-b488bf4b1a01 \
-    -p "In one sentence: what were you doing when you were interrupted?"
-
-I had just been asked to count to 30 one number per line, but I was
-interrupted before outputting any numbers — so I'd be starting from 1.
-```
-
-The session lifecycle, whole:
-
 ```text
  start ──●────●────●────✕ crash            ●────●────▶ carries on
          record   heartbeat        blackbox rescue
