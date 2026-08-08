@@ -1,4 +1,4 @@
-# blackbox
+# claude-blackbox
 
 Flight recorder + rescue for Claude Code sessions.
 
@@ -26,8 +26,8 @@ and what this adds — is three small things:
 **As a plugin** (the normal way — like claude-mem):
 
 ```
-/plugin marketplace add rdyplayerB/blackbox
-/plugin install blackbox@blackbox
+/plugin marketplace add rdyplayerB/claude-blackbox
+/plugin install claude-blackbox@rdyplayerB
 ```
 
 That wires the three hooks and the `/rescue` skill automatically, and updates

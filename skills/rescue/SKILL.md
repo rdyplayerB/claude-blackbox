@@ -15,7 +15,7 @@ store transcripts in non-default roots), and last exchange known.
 0. Locate the CLI — it records its own path on every run:
    `BB="$(cat ~/.blackbox/bin-path 2>/dev/null)"`. If that file is missing,
    fall back to `$CLAUDE_PLUGIN_ROOT/bin/blackbox`, then the newest
-   `~/.claude/plugins/cache/*/blackbox/*/bin/blackbox`.
+   `~/.claude/plugins/cache/*/claude-blackbox/*/bin/blackbox`.
 1. Run: `"$BB" list --json` — returns
    `{"crashed": [...], "live_at_risk": [...]}`.
 2. **`live_at_risk` first, always**: those sessions are running RIGHT NOW
