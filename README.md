@@ -58,6 +58,33 @@ blackbox list       # just show what's rescuable
 blackbox scan       # no markers needed: sweep all storage roots (pre-install crashes)
 ```
 
+## Knowing it's working
+
+A recorder you can't audit is a recorder you find out about at rescue time.
+Every hook invocation, guard verdict, hazard transition, rescue, and swallowed
+exception writes one JSON line to `~/.blackbox/log.jsonl` (self-truncating,
+~5 MB cap). The reader is:
+
+```
+blackbox doctor          # human report
+blackbox doctor --json   # for tooling / a Claude session
+```
+
+Doctor answers four questions the log alone can't:
+
+- **Are hooks firing at all?** Counts by event over 24h, errors with
+  tracebacks, and hook runs slow enough to delay sessions.
+- **Is every root wired?** A machine using `CLAUDE_CONFIG_DIR` profiles has
+  several config roots, each with its own settings.json — hooks in one do
+  nothing for sessions under another. Doctor names any active-but-unwired
+  root and the exact install command. (This precise hole shipped on day one
+  and doctor's first run caught it.)
+- **Did anything slip past?** Transcripts that changed in the last 24h with
+  no matching log entry — sessions blackbox never saw. Pre-install sessions
+  show here until they age out; a *growing* miss count after that is a bug.
+- **What needs action now?** Live sessions flagged not-saving, crashes
+  awaiting rescue.
+
 ## What it can't do
 
 - Resurrect sessions that never saved a transcript. It can only make sure you

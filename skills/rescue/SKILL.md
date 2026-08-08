@@ -39,3 +39,6 @@ store transcripts in non-default roots), and last exchange known.
 - Never delete marker files yourself; `blackbox rescue` consumes them on use.
 - If every session is recent and alive, say there is nothing to rescue rather
   than guessing.
+- If results look wrong (a session the user KNOWS crashed isn't listed), run
+  `"$BB" doctor --json` — it reports unwired config roots, hook errors, and
+  sessions that changed on disk without blackbox seeing them.

@@ -10,7 +10,13 @@ set -euo pipefail
 
 # Wherever this clone lives — the installer must work from any checkout path.
 BB="$(cd "$(dirname "$0")" && pwd)"
-SETTINGS="$HOME/.claude/settings.json"
+# Optional argument: which Claude config root to wire (default ~/.claude).
+# A machine using CLAUDE_CONFIG_DIR profiles has SEVERAL roots, each with its
+# own settings.json — hooks in one root do nothing for sessions under another.
+# `blackbox doctor` reports roots that are active but unwired.
+ROOT="${1:-$HOME/.claude}"
+SETTINGS="$ROOT/settings.json"
+[ -f "$SETTINGS" ] || { echo "no settings.json at $SETTINGS" >&2; exit 1; }
 TS="$(date +%Y%m%d-%H%M%S)"
 BAK="$SETTINGS.bak-blackbox-$TS"
 
@@ -52,7 +58,7 @@ if ! python3 -c "import json;json.load(open('$SETTINGS'))" 2>/dev/null; then
   exit 1
 fi
 
-mkdir -p "$HOME/.claude/skills"
-ln -sfn "$BB/skills/rescue" "$HOME/.claude/skills/rescue"
+mkdir -p "$ROOT/skills"
+ln -sfn "$BB/skills/rescue" "$ROOT/skills/rescue"
 echo "linked /rescue skill"
 echo "blackbox installed. New sessions are now flight-recorded."

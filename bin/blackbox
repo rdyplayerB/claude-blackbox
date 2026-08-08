@@ -19,6 +19,7 @@ Commands:
   blackbox list [--json]   crashed sessions (marker present, pid dead)
   blackbox rescue          interactive picker; execs the resume in your shell
   blackbox scan            registry-free sweep of every known storage root
+  blackbox doctor          is the recorder recording? hooks, errors, coverage
 """
 
 import json
@@ -31,12 +32,53 @@ HOME = os.path.expanduser("~")
 STATE = os.path.join(HOME, ".blackbox")
 LIVE = os.path.join(STATE, "live")
 ROOTS = os.path.join(STATE, "roots.json")
+LOG = os.path.join(STATE, "log.jsonl")
+LOG_MAX_BYTES = 5_000_000
+LOG_KEEP_LINES = 2000
 
 # Session-identity markers inherited from a parent Claude session. Any of these
 # means this session believes it is a child and has switched transcript saving
 # OFF — the one state blackbox cannot rescue, only shout about. (A real machine
 # lost four day-long conversations to exactly this on 2026-08-06.)
 SAVING_OFF_VARS = ["CLAUDE_CODE_CHILD_SESSION"]
+
+
+# --- logging -----------------------------------------------------------------
+# The hooks deliberately swallow every exception — a broken recorder must never
+# break the session it records. Swallowing without logging, though, makes
+# failure invisible: nothing anywhere would say the recorder was broken until
+# the day a rescue comes up empty. So: swallow, but write everything to a local
+# JSONL first. `blackbox doctor` is the reader.
+
+def _log(event, **kw):
+    try:
+        os.makedirs(STATE, exist_ok=True)
+        try:
+            if os.path.getsize(LOG) > LOG_MAX_BYTES:
+                tail = open(LOG, errors="ignore").readlines()[-LOG_KEEP_LINES:]
+                with open(LOG, "w") as f:
+                    f.writelines(tail)
+        except OSError:
+            pass
+        kw["ts"] = round(time.time(), 3)
+        kw["event"] = event
+        with open(LOG, "a") as f:
+            f.write(json.dumps(kw) + "\n")
+    except Exception:
+        pass  # logging must never become its own failure mode
+
+
+def _log_tail(n=5000):
+    try:
+        out = []
+        for line in open(LOG, errors="ignore").readlines()[-n:]:
+            try:
+                out.append(json.loads(line))
+            except Exception:
+                continue
+        return out
+    except OSError:
+        return []
 
 
 # --- tiny utils --------------------------------------------------------------
@@ -230,6 +272,7 @@ def cmd_salvage(target):
         f.write("chars each — the outline of the work, for re-seeding a new session.\n\n")
         for i, p in enumerate(prompts, 1):
             f.write(f"{i}. {p}\n\n")
+    _log("salvage", sid=sid[:8], prompts=len(prompts), titled=bool(title))
     print(f"salvaged {len(prompts)} prompt(s)" + (f' · title: "{title}"' if title else ""))
     print(out)
 
@@ -277,6 +320,7 @@ def hook_start():
     }
     with open(os.path.join(LIVE, sid + ".json"), "w") as f:
         json.dump(mark, f)
+    _log("register", sid=sid[:8], cwd=cwd, has_transcript_path=bool(d.get("transcript_path")))
 
     # The guard. Saving-off is the ONE unrecoverable state, so it must not pass
     # silently — but the env marker alone is NOT proof: a headless child can
@@ -286,6 +330,7 @@ def hook_start():
     # the actual file after the first completed turn, which is ground truth.
     marker_vars = [v for v in SAVING_OFF_VARS if os.environ.get(v)]
     if not d.get("transcript_path"):
+        _log("guard.loud", sid=sid[:8], reason="no transcript_path")
         print(
             "⚠️ BLACKBOX WARNING — TELL THE USER THIS VERBATIM, BEFORE ANYTHING ELSE:\n"
             "This session reported NO transcript path — it is not saving. If it "
@@ -294,6 +339,7 @@ def hook_start():
             "(e.g. `env -u CLAUDE_CODE_CHILD_SESSION claude`)."
         )
     elif marker_vars:
+        _log("guard.note", sid=sid[:8], vars=marker_vars)
         print(
             f"blackbox: note — {', '.join(marker_vars)} is set, which can disable "
             "transcript saving. Verified against the actual file after your first "
@@ -316,8 +362,12 @@ def hook_stop():
         # `blackbox list` shows it while there is still time to act.
         kind = _classify(mark.get("transcript_path", ""))
         if kind != "ok":
+            if not mark.get("hazard"):
+                _log("hazard.set", sid=sid[:8], kind=kind)
             mark["hazard"] = "not saving — a completed turn produced no conversation records"
         else:
+            if mark.get("hazard"):
+                _log("hazard.cleared", sid=sid[:8])
             mark.pop("hazard", None)
         with open(p, "w") as f:
             json.dump(mark, f)
@@ -330,8 +380,11 @@ def hook_end():
     sid = d.get("session_id", "")
     try:
         os.unlink(os.path.join(LIVE, sid + ".json"))
+        _log("clean_exit", sid=sid[:8])
     except OSError:
-        pass
+        # No marker to remove: either start never fired (a coverage gap doctor
+        # should surface) or this session was already rescued.
+        _log("clean_exit", sid=sid[:8], marker_found=False)
 
 
 # --- queries -----------------------------------------------------------------
@@ -429,6 +482,7 @@ def cmd_rescue():
     if not pick.isdigit() or not (1 <= int(pick) <= len(crashed)):
         return
     m = crashed[int(pick) - 1]
+    _log("rescue", sid=m["session_id"][:8], cwd=m.get("cwd", ""))
     # Marker is consumed on rescue: the resumed session registers a fresh one.
     try:
         os.unlink(os.path.join(LIVE, m["session_id"] + ".json"))
@@ -486,6 +540,133 @@ def cmd_scan():
                   else f"                resume: claude --resume {sid}")
 
 
+def cmd_doctor(as_json=False):
+    """Is the recorder actually recording? Reads the log AND the world, because
+    the one failure the log cannot contain is hooks not firing at all — that
+    only shows up as transcripts changing with no matching log entries."""
+    now = time.time()
+    day_ago = now - 86400
+    log = _log_tail()
+    recent = [e for e in log if e.get("ts", 0) >= day_ago]
+
+    counts = {}
+    for e in recent:
+        counts[e["event"]] = counts.get(e["event"], 0) + 1
+    errors = [e for e in recent if e.get("ok") is False]
+    slow = [e for e in recent if e.get("ms", 0) > 2000]
+
+    # Coverage: transcripts that changed in the last 24h whose session id never
+    # appears in the log = sessions blackbox did not see. THE reliability number.
+    seen = {e.get("sid") for e in log if e.get("sid")}
+    missed = []
+    covered = 0
+    for root in _all_roots():
+        pdir = os.path.join(root, "projects")
+        if not os.path.isdir(pdir):
+            continue
+        for proj in os.listdir(pdir):
+            full = os.path.join(pdir, proj)
+            if not os.path.isdir(full):
+                continue
+            for f in os.listdir(full):
+                if not f.endswith(".jsonl"):
+                    continue
+                try:
+                    st = os.stat(os.path.join(full, f))
+                except OSError:
+                    continue
+                if st.st_mtime < day_ago or st.st_size < 10_000:
+                    continue
+                if f[:8] in seen:
+                    covered += 1
+                else:
+                    missed.append({
+                        "root": root.replace(HOME, "~"),
+                        "project": proj,
+                        "session": f[:-6],
+                        "last_write": _fmt_age(now - st.st_mtime),
+                    })
+
+    live = crashed = hazards = 0
+    if os.path.isdir(LIVE):
+        for f in os.listdir(LIVE):
+            if not f.endswith(".json"):
+                continue
+            try:
+                mark = json.load(open(os.path.join(LIVE, f)))
+            except Exception:
+                continue
+            if _alive(mark.get("pid")):
+                live += 1
+                if mark.get("hazard"):
+                    hazards += 1
+            else:
+                crashed += 1
+
+    # A root whose sessions are active but whose settings.json never mentions
+    # blackbox is a structural hole: every session there is unprotected. This
+    # exact hole shipped on day one — per-profile CLAUDE_CONFIG_DIR roots have
+    # their own settings.json, and hooks in ~/.claude do nothing for them.
+    unwired = []
+    for root in _all_roots():
+        sp = os.path.join(root, "settings.json")
+        wired = False
+        try:
+            wired = "blackbox" in open(sp, errors="ignore").read()
+        except OSError:
+            pass
+        # Plugin installs wire hooks without touching settings.json.
+        if not wired and os.path.isdir(os.path.join(root, "plugins", "cache")):
+            try:
+                wired = any("blackbox" in d for d in os.listdir(os.path.join(root, "plugins", "cache")))
+            except OSError:
+                pass
+        if not wired:
+            unwired.append(root.replace(HOME, "~"))
+
+    report = {
+        "unwired_roots": unwired,
+        "hooks_fired_24h": counts,
+        "hook_errors_24h": len(errors),
+        "last_error": (errors[-1] if errors else None),
+        "slow_hooks_over_2s": len(slow),
+        "sessions": {"live": live, "crashed_unrescued": crashed, "live_at_risk": hazards},
+        "coverage_24h": {"recorded": covered, "missed": len(missed), "missed_detail": missed[:10]},
+        "log": {"path": LOG, "lines": len(log)},
+    }
+    if as_json:
+        print(json.dumps(report, indent=2))
+        return
+
+    print("── blackbox doctor ──")
+    if unwired:
+        print(f"  ✗ UNWIRED ROOT(S) — sessions there are completely unprotected:")
+        for r in unwired:
+            print(f"      {r}   fix: ./install.sh {r}")
+    else:
+        print("  ✓ every known root has hooks wired")
+    hooks_24h = sum(v for k, v in counts.items() if k.startswith("hook."))
+    print(f"  hooks fired (24h): {hooks_24h}  {dict(sorted(counts.items()))}")
+    if errors:
+        print(f"  ✗ {len(errors)} hook error(s) — most recent:")
+        print("    " + str(errors[-1].get("err", ""))[:300].replace("\n", "\n    "))
+    else:
+        print("  ✓ no hook errors in 24h")
+    if slow:
+        print(f"  ! {len(slow)} hook run(s) over 2s — a slow hook delays every session")
+    print(f"  sessions now: {live} live ({hazards} NOT SAVING), {crashed} crashed awaiting rescue")
+    cov = report["coverage_24h"]
+    if cov["missed"]:
+        print(f"  ✗ coverage: {cov['missed']} session(s) active in 24h that blackbox never saw:")
+        for m in cov["missed_detail"]:
+            print(f"      {m['project']}  ({m['root']}, last write {m['last_write']})")
+        print("    Causes: session predates install, hooks not wired for that")
+        print("    CLAUDE_CONFIG_DIR, or hooks failing before their first log line.")
+    else:
+        print(f"  ✓ coverage: all {cov['recorded']} active session(s) in 24h were recorded")
+    print(f"  log: {LOG} ({len(log)} lines)")
+
+
 def _drop_bin_path():
     """Record where this binary lives, so the /rescue skill and the plugin's
     hook commands can find it regardless of install method (plugin cache,
@@ -506,11 +687,18 @@ def main():
         return
     cmd = args[0]
     if cmd == "hook":
-        # Hooks must NEVER break a session: any failure is swallowed.
+        # Hooks must NEVER break a session: any failure is swallowed — but
+        # logged first, or a broken recorder is indistinguishable from a
+        # working one until a rescue comes up empty.
+        t0 = time.time()
+        sub = args[1] if len(args) > 1 else "?"
         try:
-            {"start": hook_start, "stop": hook_stop, "end": hook_end}[args[1]]()
+            {"start": hook_start, "stop": hook_stop, "end": hook_end}[sub]()
+            _log("hook." + sub, ok=True, ms=round((time.time() - t0) * 1000, 1))
         except Exception:
-            pass
+            import traceback
+            _log("hook." + sub, ok=False, ms=round((time.time() - t0) * 1000, 1),
+                 err=traceback.format_exc()[-1500:])
     elif cmd == "list":
         cmd_list(as_json="--json" in args)
     elif cmd == "rescue":
@@ -519,6 +707,8 @@ def main():
         cmd_scan()
     elif cmd == "salvage" and len(args) > 1:
         cmd_salvage(args[1])
+    elif cmd == "doctor":
+        cmd_doctor(as_json="--json" in args)
     elif cmd == "root" and len(args) > 1:
         # Register a storage root by hand — for sessions that predate blackbox
         # (hooks register roots automatically from then on).
