@@ -24,12 +24,13 @@
 > **Memory plugins remember what you *learned*. blackbox remembers what you
 > were *doing*, and puts you back there.**
 
-Born from a real loss: four day-long conversations died with an app quit on
-2026-08-06. Two turned out to be sitting on disk, findable but invisible:
-saved under a per-profile `CLAUDE_CONFIG_DIR` that no default `--resume` would
-ever look in. The other two had been running with transcript saving silently
-disabled (an inherited `CLAUDE_CODE_CHILD_SESSION` marker) and were gone,
-permanently. blackbox exists so neither happens again.
+This started with a bad afternoon. One app quit took out four day-long
+conversations at once. Two of them had been sitting on disk the whole time,
+findable but invisible, saved under a per-profile `CLAUDE_CONFIG_DIR` that no
+default `--resume` would ever think to look in. The other two had been running
+with transcript saving silently switched off, thanks to an inherited
+`CLAUDE_CODE_CHILD_SESSION` marker. Those are simply gone. blackbox exists so
+neither happens to you.
 
 Claude Code already records everything and can resume from it. What's missing, and what this
 adds, is three small things:
