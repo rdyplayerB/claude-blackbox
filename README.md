@@ -24,16 +24,15 @@
 > **Memory plugins remember what you *learned*. blackbox remembers what you
 > were *doing*, and puts you back there.**
 
-This started with a bad afternoon. One app quit took out four day-long
-conversations at once. Two of them had been sitting on disk the whole time,
-findable but invisible, saved under a per-profile `CLAUDE_CONFIG_DIR` that no
-default `--resume` would ever think to look in. The other two had been running
-with transcript saving silently switched off, thanks to an inherited
-`CLAUDE_CODE_CHILD_SESSION` marker. Those are simply gone. blackbox exists so
-neither happens to you.
+One app quit took out four day-long conversations at once. Two had been sitting
+on disk the whole time, findable but invisible, saved under a per-profile
+`CLAUDE_CONFIG_DIR` that no default `--resume` would ever look in. The other two
+had been running with transcript saving silently switched off by an inherited
+`CLAUDE_CODE_CHILD_SESSION` marker, and those are gone for good. blackbox exists
+so neither happens to you.
 
-Claude Code already records everything and can resume from it. What's missing, and what this
-adds, is three small things:
+Claude Code already records everything and can resume from it. Three things are
+missing, and blackbox adds them:
 
 | Gap | blackbox answer |
 |---|---|
@@ -55,7 +54,8 @@ adds, is three small things:
 
 ## How it works
 
-Three hooks and a directory of small JSON files. No daemon, no database.
+Three hooks and a directory of small JSON files, with no daemon and no
+database.
 
 1. **SessionStart** writes `~/.blackbox/live/<session-id>.json`: pid, cwd,
    git branch, config dir, transcript path. If the session reports no
@@ -68,11 +68,10 @@ Three hooks and a directory of small JSON files. No daemon, no database.
    install gets its marker created here instead of at start.
 3. **SessionEnd** deletes the marker.
 
-One invariant falls out: a marker whose pid is dead is a crashed session.
-`list` checks each marker with `kill -0`, pulls the last exchange from the
-transcript, and prints a resume command carrying the right
-`CLAUDE_CONFIG_DIR`. `rescue` picks one and execs it, so your terminal
-becomes the resumed session.
+A marker whose pid is dead is therefore a crashed session. `list` checks each
+marker with `kill -0`, pulls the last exchange from the transcript, and prints
+a resume command carrying the right `CLAUDE_CONFIG_DIR`. `rescue` picks one and
+execs it, so your terminal becomes the resumed session.
 
 ## Install
 
@@ -115,21 +114,21 @@ blackbox scan       # no markers needed: sweep all storage roots (pre-install cr
 blackbox salvage <session-id>   # last resort for sessions that never saved
 ```
 
-**What salvage is (and isn't):** a session running with transcript saving
-disabled still writes a sidecar file: no conversation, just ~200-char stubs
-of each prompt you typed and an AI-generated title. `salvage` extracts that
-into a markdown outline for re-seeding a new session. It is the consolation
-prize, not a recovery: if salvage is ever your primary tool, the guard has
-already failed. It exists because it works *retroactively*: the guard can
-only protect sessions started after install, but salvage can still pull the
-outline out of losses that predate blackbox entirely.
+**What salvage does:** a session running with transcript saving disabled still
+writes a sidecar file containing no conversation, just ~200-char stubs of each
+prompt you typed and an AI-generated title. `salvage` extracts that into a
+markdown outline for re-seeding a new session. It recovers an outline rather
+than the conversation, so if you are relying on it, the guard has already
+failed. It exists because it works *retroactively*: the guard can only protect
+sessions started after install, but salvage can still pull the outline out of
+losses that predate blackbox entirely.
 
 ## Knowing it's working
 
-A recorder you can't audit is a recorder you find out about at rescue time.
-Every hook invocation, guard verdict, hazard transition, rescue, and swallowed
-exception writes one JSON line to `~/.blackbox/log.jsonl` (self-truncating,
-~5 MB cap). The reader is:
+You should be able to confirm blackbox is recording before you need it to have
+recorded. Every hook invocation, guard verdict, hazard transition, rescue, and
+swallowed exception writes one JSON line to `~/.blackbox/log.jsonl`
+(self-truncating, ~5 MB cap). The reader is:
 
 ```
 blackbox doctor          # human report
@@ -153,8 +152,8 @@ Doctor answers four questions the log alone can't:
 
 ## What it can't do
 
-- Resurrect sessions that never saved a transcript. It can only make sure you
-  know *before* the loss, not after.
+- Resurrect sessions that never saved a transcript. It can only warn you while
+  the session is still running and the loss is still preventable.
 - Restart background processes the crash killed. The resumed agent re-runs
   them. File edits already on disk survive regardless.
 - Watch anything other than Claude Code (v1 scope decision).
