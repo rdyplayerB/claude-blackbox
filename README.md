@@ -1,7 +1,7 @@
 ```text
 ▛▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▜
 ▌ ◉                                                                 ◉ ▐
-▌   ● REC                                                             ▐
+▌                                                               ● REC ▐
 ▌  ██████╗ ██╗      █████╗  ██████╗██╗  ██╗██████╗  ██████╗ ██╗  ██╗  ▐
 ▌  ██╔══██╗██║     ██╔══██╗██╔════╝██║ ██╔╝██╔══██╗██╔═══██╗╚██╗██╔╝  ▐
 ▌  ██████╔╝██║     ███████║██║     █████╔╝ ██████╔╝██║   ██║ ╚███╔╝   ▐
@@ -14,9 +14,6 @@
 ▌ ◉                                                                 ◉ ▐
 ▙▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▟
 ```
-
-<p align="center"><i>Real flight recorders are painted orange so they can be
-found after the crash. This one is a JSON file. Same reason.</i></p>
 
 <p align="center">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
