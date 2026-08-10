@@ -24,6 +24,7 @@ Commands:
 
 import json
 import os
+import shlex
 import sys
 import time
 import subprocess
@@ -94,14 +95,46 @@ def _config_dir():
     return os.environ.get("CLAUDE_CONFIG_DIR", os.path.join(HOME, ".claude"))
 
 
-def _alive(pid):
+def _alive(pid, started_at=None):
+    """Is this pid our still-running session? Existence alone is not enough:
+    pids are recycled (guaranteed after a reboot), and a stranger wearing the
+    dead session's pid would hide the crash forever. So when the marker's
+    started_at is known, a process that began *after* it is somebody else."""
     if not pid:
         return False
     try:
         os.kill(int(pid), 0)
-        return True
     except (OSError, ValueError):
         return False
+    if not started_at:
+        return True
+    try:
+        # etime is locale-stable: [[dd-]hh:]mm:ss elapsed since process start.
+        out = subprocess.run(["ps", "-p", str(int(pid)), "-o", "etime="],
+                             capture_output=True, text=True, timeout=2)
+        et = out.stdout.strip()
+        if out.returncode != 0 or not et:
+            return False
+        days, rest = (et.split("-") + [""])[:2] if "-" in et else ("0", et)
+        parts = [int(x) for x in rest.split(":")]
+        while len(parts) < 3:
+            parts.insert(0, 0)
+        elapsed = int(days) * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2]
+        # 120s of slack: SessionStart fires moments after the process starts,
+        # and etime is rounded to whole seconds.
+        return time.time() - elapsed <= started_at + 120
+    except Exception:
+        return True  # can't verify — assume alive rather than false-crash it
+
+
+def _write_marker(path, mark):
+    """Atomic: a crash mid-write must not leave a half-written marker, because
+    a corrupt marker is an invisible session — the exact failure this tool
+    exists to prevent."""
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(mark, f)
+    os.replace(tmp, path)
 
 
 def _git_branch(cwd):
@@ -119,7 +152,9 @@ def _remember_root(root):
     """Track every CLAUDE_CONFIG_DIR ever seen, so scan/list can search them all."""
     roots = []
     try:
-        roots = json.load(open(ROOTS))
+        loaded = json.load(open(ROOTS))
+        if isinstance(loaded, list):
+            roots = [r for r in loaded if isinstance(r, str)]
     except Exception:
         pass
     if root not in roots:
@@ -135,8 +170,9 @@ def _remember_root(root):
 def _all_roots():
     roots = [os.path.join(HOME, ".claude")]
     try:
-        for r in json.load(open(ROOTS)):
-            if r not in roots:
+        loaded = json.load(open(ROOTS))
+        for r in (loaded if isinstance(loaded, list) else []):
+            if isinstance(r, str) and r not in roots:
                 roots.append(r)
     except Exception:
         pass
@@ -248,8 +284,11 @@ def cmd_salvage(target):
     path = target if os.path.exists(target) else None
     if not path:
         for root in _all_roots():
-            for proj in os.listdir(os.path.join(root, "projects")):
-                p = os.path.join(root, "projects", proj, target + ".jsonl")
+            pdir = os.path.join(root, "projects")
+            if not os.path.isdir(pdir):
+                continue
+            for proj in os.listdir(pdir):
+                p = os.path.join(pdir, proj, target + ".jsonl")
                 if os.path.exists(p):
                     path = p
                     break
@@ -287,13 +326,14 @@ def _fmt_age(sec):
 
 
 def _resume_cmd(mark):
-    """The exact incantation that brings this session back."""
+    """The exact incantation that brings this session back. shlex-quoted, so a
+    path with spaces, quotes, or $ survives the copy-paste."""
     parts = []
     cd = mark.get("config_dir", "")
     if cd and os.path.realpath(cd) != os.path.realpath(os.path.join(HOME, ".claude")):
-        parts.append(f'CLAUDE_CONFIG_DIR="{cd}"')
-    parts += ["claude", "--resume", mark["session_id"]]
-    return f'cd "{mark.get("cwd", ".")}" && ' + " ".join(parts)
+        parts.append(f"CLAUDE_CONFIG_DIR={shlex.quote(cd)}")
+    parts += ["claude", "--resume", shlex.quote(mark["session_id"])]
+    return f"cd {shlex.quote(mark.get('cwd', '.'))} && " + " ".join(parts)
 
 
 # --- hooks -------------------------------------------------------------------
@@ -318,8 +358,7 @@ def hook_start():
         "started_at": time.time(),
         "last_turn": time.time(),
     }
-    with open(os.path.join(LIVE, sid + ".json"), "w") as f:
-        json.dump(mark, f)
+    _write_marker(os.path.join(LIVE, sid + ".json"), mark)
     _log("register", sid=sid[:8], cwd=cwd, has_transcript_path=bool(d.get("transcript_path")))
 
     # The guard. Saving-off is the ONE unrecoverable state, so it must not pass
@@ -354,12 +393,20 @@ def hook_stop():
     if not sid:
         return
     p = os.path.join(LIVE, sid + ".json")
+    # A marker that exists but does not parse is treated as absent so the next
+    # block rebuilds it fresh — self-heal, not a permanent per-turn failure.
+    existing = None
+    if os.path.exists(p):
+        try:
+            existing = json.load(open(p))
+        except Exception:
+            _log("marker.corrupt", sid=sid[:8], ok=False)
     # Late registration. Claude Code dispatches hooks from CURRENT settings, so
     # a session that predates install still fires Stop — meaning even sessions
     # blackbox never saw start can be picked up mid-life on their next turn.
     # Without this, "running sessions are unprotected until restarted" ; with
     # it, they join the flight record the first time they finish a turn.
-    if not os.path.exists(p):
+    if existing is None:
         cwd = d.get("cwd") or os.getcwd()
         _remember_root(_config_dir())
         mark = {
@@ -375,8 +422,7 @@ def hook_stop():
         }
         try:
             os.makedirs(LIVE, exist_ok=True)
-            with open(p, "w") as f:
-                json.dump(mark, f)
+            _write_marker(p, mark)
             _log("register.late", sid=sid[:8], cwd=cwd)
         except Exception:
             # Swallowed (a broken recorder must never break the session), but
@@ -386,7 +432,7 @@ def hook_stop():
                  err=traceback.format_exc()[-1500:])
         return {"sid": sid[:8], "late": True}
     try:
-        mark = json.load(open(p))
+        mark = existing
         mark["last_turn"] = time.time()
         if d.get("transcript_path"):
             mark["transcript_path"] = d["transcript_path"]
@@ -403,8 +449,7 @@ def hook_stop():
             if mark.get("hazard"):
                 _log("hazard.cleared", sid=sid[:8])
             mark.pop("hazard", None)
-        with open(p, "w") as f:
-            json.dump(mark, f)
+        _write_marker(p, mark)
         # Per-turn ground truth on the hook.stop log line: the saving verdict
         # and transcript size for every completed turn, not just transitions.
         tbytes = 0
@@ -424,6 +469,8 @@ def hook_stop():
 def hook_end():
     d = _read_stdin_json()
     sid = d.get("session_id", "")
+    if not sid:
+        return
     try:
         os.unlink(os.path.join(LIVE, sid + ".json"))
         _log("clean_exit", sid=sid[:8])
@@ -442,7 +489,12 @@ def _is_machinery(cwd):
     tool kills its workers uncleanly they would flood the rescue list with
     sessions no human was ever in. Hidden-path cwd is the generic tell."""
     try:
+        if not cwd:
+            return False
         rel = os.path.relpath(cwd, HOME)
+        # HOME itself is "." — a person's session, not a hidden-dir tool's.
+        if rel == ".":
+            return False
         return rel.split(os.sep)[0].startswith(".") and not rel.startswith("..")
     except Exception:
         return False
@@ -459,7 +511,7 @@ def crashed_sessions():
             mark = json.load(open(os.path.join(LIVE, f)))
         except Exception:
             continue
-        if _alive(mark.get("pid")):
+        if _alive(mark.get("pid"), mark.get("started_at")):
             continue
         tp = mark.get("transcript_path", "")
         kind = _classify(tp)
@@ -494,7 +546,7 @@ def live_at_risk():
             mark = json.load(open(os.path.join(LIVE, f)))
         except Exception:
             continue
-        if mark.get("hazard") and _alive(mark.get("pid")):
+        if mark.get("hazard") and _alive(mark.get("pid"), mark.get("started_at")):
             out.append(mark)
     return out
 
@@ -569,9 +621,22 @@ def cmd_rescue():
     cd = m.get("config_dir", "")
     if cd and os.path.realpath(cd) != os.path.realpath(os.path.join(HOME, ".claude")):
         env["CLAUDE_CONFIG_DIR"] = cd
-    os.chdir(m.get("cwd", "."))
+    try:
+        os.chdir(m.get("cwd", "."))
+    except OSError:
+        # The project directory is gone (deleted or on an unmounted volume).
+        # The transcript lives under the config root, so the resume still
+        # works — just not from the original cwd.
+        print(f"blackbox: original cwd {m.get('cwd', '?')!r} no longer exists; "
+              "resuming from ~ instead.")
+        os.chdir(HOME)
     # Replace this process with the resumed session — the terminal becomes claude.
-    os.execvpe("claude", ["claude", "--resume", m["session_id"]], env)
+    try:
+        os.execvpe("claude", ["claude", "--resume", m["session_id"]], env)
+    except OSError:
+        _log("rescue.exec", sid=m["session_id"][:8], ok=False)
+        print("blackbox: could not exec `claude` (not on PATH?). Run this by hand:")
+        print(f"  {m.get('resume', '')}")
 
 
 def cmd_scan():
@@ -614,9 +679,9 @@ def cmd_scan():
             u, _ = _preview(p, tail_bytes=300_000)
             if u:
                 print(f"                you : {u[:120]}")
-            print(f"                resume: CLAUDE_CONFIG_DIR=\"{root}\" claude --resume {sid}"
+            print(f"                resume: CLAUDE_CONFIG_DIR={shlex.quote(root)} claude --resume {shlex.quote(sid)}"
                   if root != os.path.join(HOME, ".claude")
-                  else f"                resume: claude --resume {sid}")
+                  else f"                resume: claude --resume {shlex.quote(sid)}")
     _log("scan", roots=scanned)
 
 
@@ -676,7 +741,7 @@ def cmd_doctor(as_json=False):
                 mark = json.load(open(os.path.join(LIVE, f)))
             except Exception:
                 continue
-            if _alive(mark.get("pid")):
+            if _alive(mark.get("pid"), mark.get("started_at")):
                 live += 1
                 if mark.get("hazard"):
                     hazards += 1
