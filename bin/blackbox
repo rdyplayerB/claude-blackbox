@@ -345,6 +345,7 @@ def hook_start():
             "transcript saving. Verified against the actual file after your first "
             "turn; a warning follows only if it is really not saving."
         )
+    return {"sid": sid[:8]}
 
 
 def hook_stop():
@@ -378,8 +379,12 @@ def hook_stop():
                 json.dump(mark, f)
             _log("register.late", sid=sid[:8], cwd=cwd)
         except Exception:
-            pass
-        return
+            # Swallowed (a broken recorder must never break the session), but
+            # logged with ok=False so doctor surfaces it as an error.
+            import traceback
+            _log("register.late", sid=sid[:8], ok=False,
+                 err=traceback.format_exc()[-1500:])
+        return {"sid": sid[:8], "late": True}
     try:
         mark = json.load(open(p))
         mark["last_turn"] = time.time()
@@ -400,8 +405,20 @@ def hook_stop():
             mark.pop("hazard", None)
         with open(p, "w") as f:
             json.dump(mark, f)
+        # Per-turn ground truth on the hook.stop log line: the saving verdict
+        # and transcript size for every completed turn, not just transitions.
+        tbytes = 0
+        try:
+            tbytes = os.path.getsize(mark.get("transcript_path", ""))
+        except OSError:
+            pass
+        return {"sid": sid[:8], "kind": kind, "tbytes": tbytes}
     except Exception:
-        pass
+        # Swallowed, but logged with ok=False so doctor surfaces it: this is
+        # the path that verifies saving, the last place a failure may hide.
+        import traceback
+        _log("stop.update", sid=sid[:8], ok=False,
+             err=traceback.format_exc()[-1500:])
 
 
 def hook_end():
@@ -414,6 +431,7 @@ def hook_end():
         # No marker to remove: either start never fired (a coverage gap doctor
         # should surface) or this session was already rescued.
         _log("clean_exit", sid=sid[:8], marker_found=False)
+    return {"sid": sid[:8]}
 
 
 # --- queries -----------------------------------------------------------------
@@ -487,6 +505,14 @@ def cmd_list(as_json=False, show_all=False):
     if not show_all:
         crashed = [m for m in crashed if not m.get("machinery")]
     risky = live_at_risk()
+    # The log's record of what detection saw and offered: without this, a
+    # crashed session that never surfaced leaves no trail to debug from.
+    _log("list",
+         crashed=[m["session_id"][:8] for m in crashed],
+         unrecoverable=[m["session_id"][:8] for m in crashed
+                        if m.get("unrecoverable")],
+         risky=[m["session_id"][:8] for m in risky],
+         machinery=len(machinery))
     if as_json:
         print(json.dumps({"crashed": crashed, "live_at_risk": risky}, indent=2))
         return
@@ -530,12 +556,15 @@ def cmd_rescue():
     if not pick.isdigit() or not (1 <= int(pick) <= len(crashed)):
         return
     m = crashed[int(pick) - 1]
-    _log("rescue", sid=m["session_id"][:8], cwd=m.get("cwd", ""))
+    # The exec below replaces this process, so this line is the only record of
+    # exactly what was launched.
+    _log("rescue", sid=m["session_id"][:8], cwd=m.get("cwd", ""),
+         resume=m.get("resume", ""), config_dir=m.get("config_dir", ""))
     # Marker is consumed on rescue: the resumed session registers a fresh one.
     try:
         os.unlink(os.path.join(LIVE, m["session_id"] + ".json"))
     except OSError:
-        pass
+        _log("rescue.unlink", sid=m["session_id"][:8], ok=False)
     env = dict(os.environ)
     cd = m.get("config_dir", "")
     if cd and os.path.realpath(cd) != os.path.realpath(os.path.join(HOME, ".claude")):
@@ -553,6 +582,7 @@ def cmd_scan():
     would never look in from a default shell.
     """
     now = time.time()
+    scanned = {}
     for root in _all_roots():
         pdir = os.path.join(root, "projects")
         if not os.path.isdir(pdir):
@@ -573,6 +603,7 @@ def cmd_scan():
                         rows.append((st.st_mtime, st.st_size, proj, f[:-6], p))
         rows.sort(reverse=True)
         label = root.replace(HOME, "~")
+        scanned[label] = len(rows)
         print(f"\n=== {label} — {len(rows)} substantive session(s) ===")
         for mt, sz, proj, sid, p in rows[:12]:
             kind = _classify(p)
@@ -586,6 +617,7 @@ def cmd_scan():
             print(f"                resume: CLAUDE_CONFIG_DIR=\"{root}\" claude --resume {sid}"
                   if root != os.path.join(HOME, ".claude")
                   else f"                resume: claude --resume {sid}")
+    _log("scan", roots=scanned)
 
 
 def cmd_doctor(as_json=False):
@@ -741,8 +773,9 @@ def main():
         t0 = time.time()
         sub = args[1] if len(args) > 1 else "?"
         try:
-            {"start": hook_start, "stop": hook_stop, "end": hook_end}[sub]()
-            _log("hook." + sub, ok=True, ms=round((time.time() - t0) * 1000, 1))
+            extra = {"start": hook_start, "stop": hook_stop, "end": hook_end}[sub]()
+            _log("hook." + sub, ok=True, ms=round((time.time() - t0) * 1000, 1),
+                 **(extra if isinstance(extra, dict) else {}))
         except Exception:
             import traceback
             _log("hook." + sub, ok=False, ms=round((time.time() - t0) * 1000, 1),
