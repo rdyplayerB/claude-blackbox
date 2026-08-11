@@ -1,21 +1,30 @@
 #!/usr/bin/env bash
-# Remove blackbox hooks from ~/.claude/settings.json and unlink the skill.
-# Marker state in ~/.blackbox is left alone (it is only ever a few KB and may
-# still describe rescuable sessions).
+# Remove blackbox hooks from a Claude config root's settings.json and unlink
+# the skill. Same optional root argument as install.sh — a machine using
+# CLAUDE_CONFIG_DIR profiles has several roots and each must be unwired where
+# it was wired. Marker state in ~/.blackbox is left alone (it is only ever a
+# few KB and may still describe rescuable sessions).
 set -euo pipefail
 
-SETTINGS="$HOME/.claude/settings.json"
-cp "$SETTINGS" "$SETTINGS.bak-blackbox-uninstall-$(date +%Y%m%d-%H%M%S)"
+ROOT="${1:-$HOME/.claude}"
+SETTINGS="$ROOT/settings.json"
+[ -f "$SETTINGS" ] || { echo "no settings.json at $SETTINGS — nothing to unwire"; exit 0; }
+
+BAK="$SETTINGS.bak-blackbox-uninstall-$(date +%Y%m%d-%H%M%S)"
+cp "$SETTINGS" "$BAK"
 
 python3 - "$SETTINGS" <<'PY'
-import json, sys
+import json, os, sys
 p = sys.argv[1]
 d = json.load(open(p))
 hooks = d.get("hooks", {})
 for event in list(hooks):
     kept = []
     for entry in hooks[event]:
-        inner = [h for h in entry.get("hooks", []) if "blackbox" not in h.get("command", "")]
+        # Precise match — a bare "blackbox" substring would also delete
+        # unrelated user hooks that merely mention the word.
+        inner = [h for h in entry.get("hooks", [])
+                 if '/bin/blackbox" hook' not in h.get("command", "")]
         if inner:
             entry["hooks"] = inner
             kept.append(entry)
@@ -23,10 +32,22 @@ for event in list(hooks):
         hooks[event] = kept
     else:
         del hooks[event]
-json.dump(d, open(p, "w"), indent=2)
-json.load(open(p))
+# Atomic: validate the temp file, then rename. A mid-write failure leaves
+# settings.json untouched.
+tmp = p + ".blackbox-tmp"
+with open(tmp, "w") as f:
+    json.dump(d, f, indent=2)
+json.load(open(tmp))
+os.replace(tmp, p)
 print("blackbox hooks removed")
 PY
 
-rm -f "$HOME/.claude/skills/rescue"
-echo "blackbox uninstalled (state in ~/.blackbox retained)"
+# Belt and braces: never leave an unparseable settings.json behind.
+if ! python3 -c "import json;json.load(open('$SETTINGS'))" 2>/dev/null; then
+  cp "$BAK" "$SETTINGS"
+  echo "ERROR: settings.json failed validation — backup restored." >&2
+  exit 1
+fi
+
+rm -f "$ROOT/skills/rescue"
+echo "blackbox uninstalled from $ROOT (state in ~/.blackbox retained)"

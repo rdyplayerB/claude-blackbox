@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# blackbox installer — wires the three hooks into ~/.claude/settings.json and
-# links the /rescue skill. Only NEW sessions are affected; running sessions
-# never re-read hooks, so installing is always safe to do live.
+# blackbox installer — wires the three hooks into a Claude config root's
+# settings.json and links the /rescue skill. Only NEW sessions are affected;
+# running sessions never re-read hooks, so installing is always safe to do live.
 #
 # settings.json has been destroyed by a careless tool on this machine before
-# (2026-07-27), so this merges via python, backs up first, and restores the
-# backup if the result does not parse.
+# (2026-07-27), so every write here is atomic (temp + rename after validation):
+# no failure mode leaves a truncated settings.json behind, and a backup is
+# taken first regardless.
 set -euo pipefail
 
 # Wherever this clone lives — the installer must work from any checkout path.
@@ -16,27 +17,38 @@ BB="$(cd "$(dirname "$0")" && pwd)"
 # `blackbox doctor` reports roots that are active but unwired.
 ROOT="${1:-$HOME/.claude}"
 SETTINGS="$ROOT/settings.json"
-[ -f "$SETTINGS" ] || { echo "no settings.json at $SETTINGS" >&2; exit 1; }
 TS="$(date +%Y%m%d-%H%M%S)"
-BAK="$SETTINGS.bak-blackbox-$TS"
 
 chmod +x "$BB/bin/blackbox"
 
+# A fresh root (new machine, or a profile that never saved settings) simply
+# has no settings.json yet — start it from an empty object rather than
+# refusing to protect the root.
+if [ ! -f "$SETTINGS" ]; then
+  mkdir -p "$ROOT"
+  printf '{}\n' > "$SETTINGS"
+  echo "created empty $SETTINGS"
+fi
+
+BAK="$SETTINGS.bak-blackbox-$TS"
 cp "$SETTINGS" "$BAK"
 echo "backed up settings.json -> $BAK"
 
 python3 - "$SETTINGS" "$BB" <<'PY'
-import json, sys
+import json, os, sys
 settings_path, bb = sys.argv[1], sys.argv[2]
 d = json.load(open(settings_path))
 hooks = d.setdefault("hooks", {})
 
 def ensure(event, cmd):
     entries = hooks.setdefault(event, [])
-    # Idempotent: skip if any hook for this event already invokes blackbox.
+    # Idempotent: skip only if a hook for this event already invokes the
+    # blackbox HOOK — matched precisely, because a bare "blackbox" substring
+    # also matches unrelated user hooks (e.g. ~/bin/blackbox-theme.sh) and
+    # would silently skip real wiring.
     for e in entries:
         for h in e.get("hooks", []):
-            if "blackbox" in h.get("command", ""):
+            if '/bin/blackbox" hook' in h.get("command", ""):
                 return False
     entries.append({"hooks": [{"type": "command", "command": cmd}]})
     return True
@@ -46,12 +58,17 @@ for event, sub in (("SessionStart", "start"), ("Stop", "stop"), ("SessionEnd", "
     if ensure(event, f'"{bb}/bin/blackbox" hook {sub}'):
         added.append(event)
 
-json.dump(d, open(settings_path, "w"), indent=2)
-# Prove the write is valid JSON before declaring success.
-json.load(open(settings_path))
+# Atomic: write to a temp file, validate THAT, then rename over the original.
+# A mid-write failure (disk full, interrupt) leaves settings.json untouched.
+tmp = settings_path + ".blackbox-tmp"
+with open(tmp, "w") as f:
+    json.dump(d, f, indent=2)
+json.load(open(tmp))
+os.replace(tmp, settings_path)
 print(f"hooks added: {added or 'none (already installed)'}")
 PY
 
+# Belt and braces: if anything above still left the file unparseable, restore.
 if ! python3 -c "import json;json.load(open('$SETTINGS'))" 2>/dev/null; then
   cp "$BAK" "$SETTINGS"
   echo "ERROR: settings.json failed validation — backup restored." >&2

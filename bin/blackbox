@@ -162,6 +162,31 @@ def _alive(pid, started_at=None):
         return True  # can't verify — assume alive rather than false-crash it
 
 
+def _session_pid():
+    """The pid of the claude process this hook serves. A manual install's
+    simple hook command gets exec-optimized by the dispatching shell, so
+    getppid() IS claude — but a plugin install runs the binary inside a
+    compound bash -c command, which forks: getppid() is a transient wrapper
+    shell that dies seconds later, and a marker recording it would make every
+    live session read as crashed. Walk ancestors past shells to the process
+    whose death actually means the session died."""
+    pid = os.getppid()
+    try:
+        for _ in range(5):
+            out = subprocess.run(["ps", "-p", str(pid), "-o", "ppid=,comm="],
+                                 capture_output=True, text=True, timeout=2)
+            fields = out.stdout.split()
+            if out.returncode != 0 or len(fields) < 2:
+                break
+            comm = os.path.basename(fields[1]).lstrip("-")
+            if comm not in ("bash", "sh", "zsh", "dash", "ksh", "fish"):
+                break
+            pid = int(fields[0])
+    except Exception:
+        pass
+    return pid
+
+
 def _write_marker(path, mark):
     """Atomic: a crash mid-write must not leave a half-written marker, because
     a corrupt marker is an invisible session — the exact failure this tool
@@ -362,10 +387,13 @@ def _fmt_age(sec):
 
 def _resume_cmd(mark):
     """The exact incantation that brings this session back. shlex-quoted, so a
-    path with spaces, quotes, or $ survives the copy-paste."""
+    path with spaces, quotes, or $ survives the copy-paste. The config root is
+    ALWAYS stated, even when it is the default: the shell this gets pasted
+    into may have inherited some other profile's CLAUDE_CONFIG_DIR, and an
+    implicit root then resumes against the wrong storage."""
     parts = []
     cd = mark.get("config_dir", "")
-    if cd and os.path.realpath(cd) != os.path.realpath(os.path.join(HOME, ".claude")):
+    if cd:
         parts.append(f"CLAUDE_CONFIG_DIR={shlex.quote(cd)}")
     parts += ["claude", "--resume", shlex.quote(mark["session_id"])]
     return f"cd {shlex.quote(mark.get('cwd', '.'))} && " + " ".join(parts)
@@ -379,6 +407,17 @@ def hook_start():
     if not sid:
         return
     os.makedirs(LIVE, exist_ok=True)
+    # Sweep rescue leftovers: this session's own consumed marker (a rescue
+    # that just succeeded re-registers here), plus any .rescued old enough
+    # that its rescue clearly wasn't rolled back.
+    try:
+        for f in os.listdir(LIVE):
+            if f.endswith(".rescued"):
+                p = os.path.join(LIVE, f)
+                if f.startswith(sid) or time.time() - os.path.getmtime(p) > 7 * 86400:
+                    os.unlink(p)
+    except OSError:
+        pass
     cwd = d.get("cwd") or os.getcwd()
     cfg = _config_dir()
     _remember_root(cfg)
@@ -387,7 +426,7 @@ def hook_start():
         "cwd": cwd,
         "branch": _git_branch(cwd),
         # The hook runs as a child of the claude process itself.
-        "pid": os.getppid(),
+        "pid": _session_pid(),
         "transcript_path": d.get("transcript_path", ""),
         "config_dir": cfg,
         "started_at": time.time(),
@@ -448,7 +487,7 @@ def hook_stop():
             "session_id": sid,
             "cwd": cwd,
             "branch": _git_branch(cwd),
-            "pid": os.getppid(),
+            "pid": _session_pid(),
             "transcript_path": d.get("transcript_path", ""),
             "config_dir": _config_dir(),
             "started_at": time.time(),
@@ -524,19 +563,27 @@ def hook_end():
 
 # --- queries -----------------------------------------------------------------
 
+# Directories whose sessions are spawned by tools, not typed by people.
+# claude-mem runs its observers from ~/.claude-mem/observer-sessions.
+MACHINERY_DIRS = {".claude-mem"}
+
+
 def _is_machinery(cwd):
-    """Sessions run by tools, not people. Memory plugins (claude-mem) and other
-    machinery spawn their own Claude sessions from hidden directories; when a
-    tool kills its workers uncleanly they would flood the rescue list with
-    sessions no human was ever in. Hidden-path cwd is the generic tell."""
+    """Sessions run by tools, not people. Memory plugins (claude-mem) and
+    similar machinery spawn their own Claude sessions; when a tool kills its
+    workers uncleanly they would flood the rescue list with sessions no human
+    was ever in. Matched by a DENYLIST of known tool dirs — "any hidden
+    directory" was tried first and hid real human work in ~/.dotfiles and
+    ~/.config from the rescue flow."""
     try:
         if not cwd:
             return False
         rel = os.path.relpath(cwd, HOME)
-        # HOME itself is "." — a person's session, not a hidden-dir tool's.
-        if rel == ".":
+        if rel == "." or rel.startswith(".."):
             return False
-        return rel.split(os.sep)[0].startswith(".") and not rel.startswith("..")
+        if rel.split(os.sep)[0] in MACHINERY_DIRS:
+            return True
+        return "observer-sessions" in cwd
     except Exception:
         return False
 
@@ -593,6 +640,9 @@ def live_at_risk():
 
 
 def cmd_list(as_json=False, show_all=False):
+    """Print the rescue picture and return the crashed list exactly as
+    numbered on screen — cmd_rescue indexes THIS list, so what the user sees
+    and what a typed number selects can never diverge."""
     crashed = crashed_sessions()
     machinery = [m for m in crashed if m.get("machinery")]
     if not show_all:
@@ -607,8 +657,12 @@ def cmd_list(as_json=False, show_all=False):
          risky=[m["session_id"][:8] for m in risky],
          machinery=len(machinery))
     if as_json:
-        print(json.dumps({"crashed": crashed, "live_at_risk": risky}, indent=2))
-        return
+        # Machinery is data, not a secret: consumers (the /rescue skill) get
+        # the hidden entries too and decide for themselves.
+        print(json.dumps({"crashed": crashed, "live_at_risk": risky,
+                          "machinery_hidden": [] if show_all else machinery},
+                         indent=2))
+        return crashed
     for m in risky:
         proj = m.get("cwd", "?").replace(HOME, "~")
         print(f"⚠ LIVE BUT NOT SAVING: {proj} — {m['hazard']}")
@@ -617,7 +671,7 @@ def cmd_list(as_json=False, show_all=False):
         print(f"({len(machinery)} background tool session(s) hidden — plugins running their own claudes; --all shows them)")
     if not crashed:
         print("blackbox: no crashed sessions. (Live ones are fine; clean exits are cleaned up.)")
-        return
+        return crashed
     now = time.time()
     for i, m in enumerate(crashed, 1):
         proj = m.get("cwd", "?").replace(HOME, "~")
@@ -633,15 +687,13 @@ def cmd_list(as_json=False, show_all=False):
         if m.get("last_assistant"):
             print(f"     it  : {m['last_assistant']}")
         print(f"     resume: {m['resume']}")
+    return crashed
 
 
 def cmd_rescue():
-    crashed = [m for m in crashed_sessions()
-               if not m.get("unrecoverable") and not m.get("machinery")]
-    if not crashed:
-        cmd_list()
+    crashed = cmd_list()
+    if not any(not m.get("unrecoverable") for m in crashed):
         return
-    cmd_list()
     try:
         pick = input("\nblackbox> resume which? [number, or enter to quit] ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -649,19 +701,35 @@ def cmd_rescue():
     if not pick.isdigit() or not (1 <= int(pick) <= len(crashed)):
         return
     m = crashed[int(pick) - 1]
+    sid = m["session_id"]
+    if m.get("unrecoverable"):
+        print("blackbox: that session is unrecoverable — the conversation was never saved."
+              + (f" Try: blackbox salvage {sid}" if m.get("salvageable") else ""))
+        return
     # The exec below replaces this process, so this line is the only record of
     # exactly what was launched.
-    _log("rescue", sid=m["session_id"][:8], cwd=m.get("cwd", ""),
+    _log("rescue", sid=sid[:8], cwd=m.get("cwd", ""),
          resume=m.get("resume", ""), config_dir=m.get("config_dir", ""))
-    # Marker is consumed on rescue: the resumed session registers a fresh one.
+    # Consume the marker by RENAME, not unlink: if the exec below fails, the
+    # rename is reversed and the crash record survives. Deleting first would
+    # silently erase the one pointer to the crashed session — the exact loss
+    # this tool exists to prevent. On success the resumed session registers
+    # a fresh marker and the .rescued file is swept by the next hook start.
+    mp = os.path.join(LIVE, sid + ".json")
+    consumed = mp + ".rescued"
     try:
-        os.unlink(os.path.join(LIVE, m["session_id"] + ".json"))
+        os.replace(mp, consumed)
     except OSError:
-        _log("rescue.unlink", sid=m["session_id"][:8], ok=False)
+        _log("rescue.consume", sid=sid[:8], ok=False)
     env = dict(os.environ)
     cd = m.get("config_dir", "")
-    if cd and os.path.realpath(cd) != os.path.realpath(os.path.join(HOME, ".claude")):
+    # Set the session's root EXPLICITLY, even when it is the default: this
+    # shell may have inherited some other profile's CLAUDE_CONFIG_DIR, and
+    # resuming against the wrong root fails with "no conversation found".
+    if cd:
         env["CLAUDE_CONFIG_DIR"] = cd
+    else:
+        env.pop("CLAUDE_CONFIG_DIR", None)
     try:
         os.chdir(m.get("cwd", "."))
     except OSError:
@@ -673,9 +741,13 @@ def cmd_rescue():
         os.chdir(HOME)
     # Replace this process with the resumed session — the terminal becomes claude.
     try:
-        os.execvpe("claude", ["claude", "--resume", m["session_id"]], env)
+        os.execvpe("claude", ["claude", "--resume", sid], env)
     except OSError:
-        _log("rescue.exec", sid=m["session_id"][:8], ok=False)
+        try:
+            os.replace(consumed, mp)  # restore the crash record
+        except OSError:
+            pass
+        _log("rescue.exec", sid=sid[:8], ok=False)
         print("blackbox: could not exec `claude` (not on PATH?). Run this by hand:")
         print(f"  {m.get('resume', '')}")
 
@@ -720,9 +792,8 @@ def cmd_scan():
             u, _ = _preview(p, tail_bytes=300_000)
             if u:
                 print(f"                you : {u[:120]}")
-            print(f"                resume: CLAUDE_CONFIG_DIR={shlex.quote(root)} claude --resume {shlex.quote(sid)}"
-                  if root != os.path.join(HOME, ".claude")
-                  else f"                resume: claude --resume {shlex.quote(sid)}")
+            print(f"                resume: CLAUDE_CONFIG_DIR={shlex.quote(root)} "
+                  f"claude --resume {shlex.quote(sid)}")
     _log("scan", roots=scanned)
 
 
