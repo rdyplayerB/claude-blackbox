@@ -24,6 +24,26 @@
 > **Memory plugins remember what you *learned*. blackbox remembers what you
 > were *doing*, and puts you back there.**
 
+```
+/plugin marketplace add rdyplayerB/claude-blackbox
+/plugin install claude-blackbox@rdyplayerB
+```
+
+## When you need this
+
+- Claude Code crashed, or the app force-quit, and the conversation seems gone
+- You closed a terminal (or your machine restarted) mid-task and want to
+  resume the session with its full context
+- `claude --resume` shows nothing because the session ran under a
+  per-profile `CLAUDE_CONFIG_DIR`
+- You want to know a session stopped saving its transcript *while it is
+  still running*, not after the loss
+
+If a crash already happened before you found this page: install, then run
+`blackbox scan`, which finds resumable sessions from before blackbox existed.
+
+## Why it exists
+
 One app quit took out four day-long conversations at once. Two had been sitting
 on disk the whole time, findable but invisible, saved under a per-profile
 `CLAUDE_CONFIG_DIR` that no default `--resume` would ever look in. The other two

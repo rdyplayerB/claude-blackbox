@@ -7,7 +7,7 @@
     {
       "name": "claude-blackbox",
       "source": "./",
-      "description": "Flight recorder + rescue for Claude Code sessions. Crashed sessions become resumable with one command; live sessions that aren't saving their transcript get flagged before the loss, not after."
+      "description": "Crash recovery for Claude Code sessions. A crashed or force-quit session becomes resumable with one command; a live session that stops saving its transcript gets flagged before the loss, not after."
     }
   ]
 }
