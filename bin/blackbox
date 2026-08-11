@@ -51,6 +51,20 @@ SAVING_OFF_VARS = ["CLAUDE_CODE_CHILD_SESSION"]
 # the day a rescue comes up empty. So: swallow, but write everything to a local
 # JSONL first. `blackbox doctor` is the reader.
 
+def _flock_bounded(fcntl, f, op, tries=20, delay=0.05):
+    """Non-blocking lock with a ~1s retry budget. A blocking flock made every
+    hook on the machine wait behind one stuck lock-holder (measured: 19.5s,
+    i.e. until the hook timeout). A session must never stall on telemetry:
+    if the lock stays busy, the caller drops the work instead."""
+    for _ in range(tries):
+        try:
+            fcntl.flock(f, op | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            time.sleep(delay)
+    return False
+
+
 def _log(event, **kw):
     """Append one JSONL line, safely under concurrency. Several sessions log
     at once; a naive read-tail-rewrite truncation clobbers concurrent appends
@@ -67,7 +81,8 @@ def _log(event, **kw):
         line = json.dumps(kw) + "\n"
         for _ in range(3):
             with open(LOG, "a") as f:
-                fcntl.flock(f, fcntl.LOCK_SH)
+                if not _flock_bounded(fcntl, f, fcntl.LOCK_SH):
+                    return  # lock stuck — drop the line, never the session
                 try:
                     if os.fstat(f.fileno()).st_ino != os.stat(LOG).st_ino:
                         continue  # replaced under us — reopen and retry
@@ -89,7 +104,8 @@ def _truncate_log(fcntl):
     The lock waits out in-flight appends, and appends that begin after the
     os.replace() land in the new file via the inode re-check in _log."""
     with open(LOG, "a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
+        if not _flock_bounded(fcntl, f, fcntl.LOCK_EX, tries=5):
+            return  # busy — the next log call will retry truncation
         try:
             if os.fstat(f.fileno()).st_ino != os.stat(LOG).st_ino:
                 return  # someone else already truncated
