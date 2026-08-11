@@ -328,7 +328,11 @@ def _salvage(transcript_path):
                 if d.get("type") == "ai-title":
                     title = d.get("aiTitle", title)
                 elif d.get("type") == "last-prompt":
-                    p = d.get("lastPrompt", "").strip()
+                    # Collapse internal newlines (a multi-line prompt would
+                    # break the numbered outline) and enforce the ~200-char
+                    # stub the output header promises — records are usually
+                    # that short already, but nothing guarantees it.
+                    p = " ".join(d.get("lastPrompt", "").split())[:200]
                     # Teammate/system relays are machinery, not the person's prompts.
                     if p.startswith("Another Claude session sent"):
                         continue
