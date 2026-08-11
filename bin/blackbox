@@ -978,32 +978,31 @@ def cmd_doctor(as_json=False):
             else:
                 crashed += 1
 
-    # A root whose sessions are active but whose settings.json never mentions
-    # blackbox is a structural hole: every session there is unprotected. This
-    # exact hole shipped on day one — per-profile CLAUDE_CONFIG_DIR roots have
-    # their own settings.json, and hooks in ~/.claude do nothing for them.
+    # A root is protected only by what ITS OWN settings.json says: manual
+    # hook commands, or an enabledPlugins entry. Nothing else counts — the
+    # plugin installation registry and cache are SHARED across roots, and
+    # checking them once reported a root as wired while its sessions ran
+    # completely unhooked for five hours (a plugin installed from a session
+    # under root A records enablement in A's settings, not the root the user
+    # believed they were installing for).
     unwired = []
     for root in _all_roots():
         sp = os.path.join(root, "settings.json")
         wired = False
         try:
-            wired = "blackbox" in open(sp, errors="ignore").read()
-        except OSError:
+            s = json.load(open(sp, encoding="utf-8-sig"))
+            for entries in s.get("hooks", {}).values():
+                for entry in entries:
+                    for h in entry.get("hooks", []):
+                        if '/bin/blackbox" hook' in h.get("command", ""):
+                            wired = True
+            if not wired:
+                ep = s.get("enabledPlugins", {})
+                if isinstance(ep, dict):
+                    wired = any("blackbox@" in k and bool(v)
+                                for k, v in ep.items())
+        except Exception:
             pass
-        # Plugin installs wire hooks without touching settings.json. The
-        # registry is authoritative; the cache glob (marketplace/plugin/version
-        # layout) is the fallback for registry formats we don't know.
-        if not wired:
-            try:
-                wired = "blackbox@" in open(
-                    os.path.join(root, "plugins", "installed_plugins.json"),
-                    errors="ignore").read()
-            except OSError:
-                pass
-        if not wired:
-            import glob
-            wired = bool(glob.glob(os.path.join(
-                root, "plugins", "cache", "*", "*blackbox", "*", "bin", "blackbox")))
         if not wired:
             unwired.append(root.replace(HOME, "~"))
 
@@ -1029,8 +1028,11 @@ def cmd_doctor(as_json=False):
         print(f"  ✗ UNWIRED ROOT(S) — sessions there are completely unprotected:")
         for r in unwired:
             print(f"      {r}")
-            print(f"        fix: in a session under that root run "
-                  f"/plugin install blackbox@rdyplayerB")
+            # The explicit form: installing from "a session under that root"
+            # already burned one user — the pane wasn't under the root they
+            # thought, enablement landed elsewhere, and doctor said fine.
+            print(f"        fix: CLAUDE_CONFIG_DIR={r} claude plugin install "
+                  f"blackbox@rdyplayerB")
             print(f"        (or, from a clone: ./install.sh {r})")
     else:
         print("  ✓ every known root has hooks wired")
