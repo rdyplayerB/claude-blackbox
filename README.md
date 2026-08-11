@@ -26,7 +26,7 @@
 
 ```
 /plugin marketplace add rdyplayerB/claude-blackbox
-/plugin install claude-blackbox@rdyplayerB
+/plugin install blackbox@rdyplayerB
 ```
 
 ## When you need this
@@ -99,7 +99,7 @@ execs it, so your terminal becomes the resumed session.
 
 ```
 /plugin marketplace add rdyplayerB/claude-blackbox
-/plugin install claude-blackbox@rdyplayerB
+/plugin install blackbox@rdyplayerB
 ```
 
 That wires the three hooks and the `/rescue` skill automatically, and updates

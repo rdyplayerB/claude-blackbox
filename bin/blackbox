@@ -923,7 +923,7 @@ def cmd_doctor(as_json=False):
         # layout) is the fallback for registry formats we don't know.
         if not wired:
             try:
-                wired = "claude-blackbox" in open(
+                wired = "blackbox@" in open(
                     os.path.join(root, "plugins", "installed_plugins.json"),
                     errors="ignore").read()
             except OSError:
@@ -931,7 +931,7 @@ def cmd_doctor(as_json=False):
         if not wired:
             import glob
             wired = bool(glob.glob(os.path.join(
-                root, "plugins", "cache", "*", "claude-blackbox", "*", "bin", "blackbox")))
+                root, "plugins", "cache", "*", "*blackbox", "*", "bin", "blackbox")))
         if not wired:
             unwired.append(root.replace(HOME, "~"))
 
@@ -958,7 +958,7 @@ def cmd_doctor(as_json=False):
         for r in unwired:
             print(f"      {r}")
             print(f"        fix: in a session under that root run "
-                  f"/plugin install claude-blackbox@rdyplayerB")
+                  f"/plugin install blackbox@rdyplayerB")
             print(f"        (or, from a clone: ./install.sh {r})")
     else:
         print("  ✓ every known root has hooks wired")

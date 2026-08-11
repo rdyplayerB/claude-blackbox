@@ -1,6 +1,6 @@
 ---
 name: rescue
-description: List Claude Code sessions that died without a clean exit (crash, force-quit, killed terminal) and hand back the exact command to resume each one with full context. Use when the user says a session crashed, an app killed their sessions, they lost a conversation, or they want to continue where a dead session left off.
+description: Rescue crashed Claude Code sessions. Lists what died without a clean exit (crash, force-quit, killed terminal) and hands back the exact command to resume each one with full context. Use when a session crashed, an app killed sessions, a conversation was lost, or the user wants to continue where a dead session left off.
 ---
 
 # Session rescue

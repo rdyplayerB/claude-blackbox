@@ -5,7 +5,7 @@
   },
   "plugins": [
     {
-      "name": "claude-blackbox",
+      "name": "blackbox",
       "source": "./",
       "description": "Crash recovery for Claude Code sessions. A crashed or force-quit session becomes resumable with one command; a live session that stops saving its transcript gets flagged before the loss, not after."
     }
