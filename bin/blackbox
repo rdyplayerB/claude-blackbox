@@ -436,6 +436,12 @@ def hook_stop():
         mark["last_turn"] = time.time()
         if d.get("transcript_path"):
             mark["transcript_path"] = d["transcript_path"]
+        # Refresh cwd and branch too: a project directory renamed mid-session
+        # (observed in the wild) would otherwise leave the resume command
+        # pointing at a path that no longer exists.
+        if d.get("cwd") and d["cwd"] != mark.get("cwd"):
+            mark["cwd"] = d["cwd"]
+            mark["branch"] = _git_branch(d["cwd"])
         # Ground truth: after a completed turn, a saving session's transcript
         # holds real message records. A skeleton or missing file here means the
         # session is burning unrecoverable context RIGHT NOW — flagged so
