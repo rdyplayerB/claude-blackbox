@@ -795,7 +795,10 @@ def cmd_doctor(as_json=False):
     if unwired:
         print(f"  ✗ UNWIRED ROOT(S) — sessions there are completely unprotected:")
         for r in unwired:
-            print(f"      {r}   fix: ./install.sh {r}")
+            print(f"      {r}")
+            print(f"        fix: in a session under that root run "
+                  f"/plugin install claude-blackbox@rdyplayerB")
+            print(f"        (or, from a clone: ./install.sh {r})")
     else:
         print("  ✓ every known root has hooks wired")
     hooks_24h = sum(v for k, v in counts.items() if k.startswith("hook."))
