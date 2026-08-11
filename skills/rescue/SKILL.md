@@ -35,9 +35,10 @@ store transcripts in non-default roots), and last exchange known.
 5. Any session flagged `unrecoverable: true` never saved a transcript. Say so
    plainly — nothing can restore it — and do not invent hope.
 6. For the session(s) the user wants back, give them the `resume` command to
-   run **in their own terminal** (suggest the `!` prefix to run it from the
-   prompt). Do not run it yourself: `claude --resume` replaces the current
-   session, which would kill the very session the user is speaking through.
+   run **in a separate plain terminal**. Do not run it yourself, and do not
+   suggest the `!` prefix: `claude --resume` is an interactive program that
+   replaces its process, so running it from inside a session nests one TUI
+   in another or kills the very session the user is speaking through.
 
 ## Rules
 
