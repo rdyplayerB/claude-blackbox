@@ -31,9 +31,19 @@ store transcripts in non-default roots), and last exchange known.
    plugins etc.), listed in case one is actually the user's.
 4. Otherwise, present each crashed session conversationally: project, branch,
    how long ago it was last active, and the last user/assistant exchange so
-   the user can recognize the conversation.
+   the user can recognize the conversation. **Order by relevance to where the
+   user is sitting**: compare each entry's `cwd` to the current working
+   directory, lead with matches labeled as this project's sessions, and list
+   the rest under "also found elsewhere". If NO entry matches the current
+   project, say that first — the session the user is looking for probably
+   predates blackbox here — and offer `"$BB" scan` to find it by sweeping
+   storage roots directly.
 5. Any session flagged `unrecoverable: true` never saved a transcript. Say so
-   plainly — nothing can restore it — and do not invent hope.
+   plainly — nothing can restore it — and do not invent hope. Any session
+   flagged `maybe_live: true` has evidence it is still running (fresh
+   transcript writes or an unaccounted live claude in its directory): warn
+   the user to confirm its window is really gone before resuming, because
+   resuming a live session collides with it.
 6. For the session(s) the user wants back, give them the `resume` command to
    run **in a separate plain terminal**. Do not run it yourself, and do not
    suggest the `!` prefix: `claude --resume` is an interactive program that

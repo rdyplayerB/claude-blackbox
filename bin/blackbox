@@ -600,10 +600,39 @@ def _is_machinery(cwd):
         return False
 
 
+def _claude_cwds_unaccounted(alive_marker_pids):
+    """cwd -> count of running claude CLI processes NOT owned by any alive
+    marker. A dead-pid marker whose cwd hosts such a process is very likely
+    that process wearing a stale (wrapper-pid) marker — a live session that
+    would collide if resumed. Observed in the wild: two idle Blogogi sessions
+    listed as cleanly rescuable while three claudes ran in that directory."""
+    cwds = {}
+    try:
+        out = subprocess.run(["ps", "ax", "-o", "pid=,comm="],
+                             capture_output=True, text=True, timeout=3).stdout
+        for line in out.splitlines():
+            parts = line.split(None, 1)
+            if len(parts) != 2 or os.path.basename(parts[1].strip()) != "claude":
+                continue
+            pid = int(parts[0])
+            if pid in alive_marker_pids:
+                continue
+            lo = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                                capture_output=True, text=True, timeout=3).stdout
+            for l in lo.splitlines():
+                if l.startswith("n"):
+                    cwds[l[1:]] = cwds.get(l[1:], 0) + 1
+    except Exception:
+        pass
+    return cwds
+
+
 def crashed_sessions():
     out = []
     if not os.path.isdir(LIVE):
         return out
+    dead = []
+    alive_pids = set()
     for f in os.listdir(LIVE):
         if not f.endswith(".json"):
             continue
@@ -612,7 +641,11 @@ def crashed_sessions():
         except Exception:
             continue
         if _alive(mark.get("pid"), mark.get("started_at")):
+            alive_pids.add(int(mark.get("pid", 0)))
             continue
+        dead.append(mark)
+    orphan_cwds = _claude_cwds_unaccounted(alive_pids) if dead else {}
+    for mark in dead:
         tp = mark.get("transcript_path", "")
         kind = _classify(tp)
         if kind != "ok":
@@ -627,16 +660,18 @@ def crashed_sessions():
         mark["last_assistant"] = a
         if kind == "ok":
             mark["resume"] = _resume_cmd(mark)
-        # A dead pid with a transcript written moments ago is contradictory
-        # evidence: something is still driving that conversation (a stale
-        # wrapper-pid marker, or a pid the tracker lost). Flag rather than
-        # hide — hiding would delay a real rescue, but resuming a live
-        # session collides with it.
+        # Contradictory evidence that the session is actually still running:
+        # a transcript written moments ago, or an unaccounted-for live claude
+        # process in the same directory (a stale wrapper-pid marker's real
+        # process). Flag rather than hide — hiding would delay a real rescue,
+        # but resuming a live session collides with it.
         try:
             if time.time() - os.path.getmtime(tp) < 300:
                 mark["maybe_live"] = True
         except OSError:
             pass
+        if orphan_cwds.get(mark.get("cwd", ""), 0) > 0:
+            mark["maybe_live"] = True
         out.append(mark)
     out.sort(key=lambda m: -m.get("last_turn", 0))
     return out
@@ -705,8 +740,9 @@ def cmd_list(as_json=False, show_all=False):
                 print(f"     partial: blackbox salvage {m['session_id']}   (title + prompt outline)")
             continue
         if m.get("maybe_live"):
-            print("     ⚠ transcript written in the last 5 minutes — this session may")
-            print("       still be RUNNING (stale marker), not crashed. Check before resuming.")
+            print("     ⚠ this session may still be RUNNING (fresh transcript writes, or a")
+            print("       live claude in its directory that no marker accounts for).")
+            print("       Check that its window is really gone before resuming.")
         if m.get("last_user"):
             print(f"     you : {m['last_user']}")
         if m.get("last_assistant"):
@@ -733,8 +769,9 @@ def cmd_rescue():
         return
     if m.get("maybe_live"):
         try:
-            sure = input("blackbox> its transcript was written minutes ago — the session "
-                         "may still be RUNNING. Resume anyway? [y/N] ").strip().lower()
+            sure = input("blackbox> evidence says this session may still be RUNNING "
+                         "(fresh writes or an unaccounted live claude in its directory). "
+                         "Resume anyway? [y/N] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             return
         if sure != "y":
