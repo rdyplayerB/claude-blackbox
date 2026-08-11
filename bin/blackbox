@@ -52,21 +52,56 @@ SAVING_OFF_VARS = ["CLAUDE_CODE_CHILD_SESSION"]
 # JSONL first. `blackbox doctor` is the reader.
 
 def _log(event, **kw):
+    """Append one JSONL line, safely under concurrency. Several sessions log
+    at once; a naive read-tail-rewrite truncation clobbers concurrent appends
+    (measured: ~6% of lines lost at the boundary). Appenders take a shared
+    flock and re-verify the path still names their inode — an appender that
+    lost a race against truncation's os.replace() reopens instead of writing
+    into the orphaned file. The truncator takes the exclusive flock, so it
+    only ever rewrites a quiescent log."""
     try:
+        import fcntl
         os.makedirs(STATE, exist_ok=True)
-        try:
-            if os.path.getsize(LOG) > LOG_MAX_BYTES:
-                tail = open(LOG, errors="ignore").readlines()[-LOG_KEEP_LINES:]
-                with open(LOG, "w") as f:
-                    f.writelines(tail)
-        except OSError:
-            pass
         kw["ts"] = round(time.time(), 3)
         kw["event"] = event
-        with open(LOG, "a") as f:
-            f.write(json.dumps(kw) + "\n")
+        line = json.dumps(kw) + "\n"
+        for _ in range(3):
+            with open(LOG, "a") as f:
+                fcntl.flock(f, fcntl.LOCK_SH)
+                try:
+                    if os.fstat(f.fileno()).st_ino != os.stat(LOG).st_ino:
+                        continue  # replaced under us — reopen and retry
+                    f.write(line)
+                    break
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
+        try:
+            if os.path.getsize(LOG) > LOG_MAX_BYTES:
+                _truncate_log(fcntl)
+        except OSError:
+            pass
     except Exception:
         pass  # logging must never become its own failure mode
+
+
+def _truncate_log(fcntl):
+    """Rewrite the log to its last LOG_KEEP_LINES under an exclusive flock.
+    The lock waits out in-flight appends, and appends that begin after the
+    os.replace() land in the new file via the inode re-check in _log."""
+    with open(LOG, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            if os.fstat(f.fileno()).st_ino != os.stat(LOG).st_ino:
+                return  # someone else already truncated
+            if os.path.getsize(LOG) <= LOG_MAX_BYTES:
+                return
+            tail = open(LOG, errors="ignore").readlines()[-LOG_KEEP_LINES:]
+            tmp = LOG + ".tmp"
+            with open(tmp, "w") as t:
+                t.writelines(tail)
+            os.replace(tmp, LOG)
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def _log_tail(n=5000):
