@@ -55,5 +55,12 @@ if ! python3 -c "import json;json.load(open('$SETTINGS'))" 2>/dev/null; then
   exit 1
 fi
 
-rm -f "$ROOT/skills/rescue"
+# Remove only the symlink install.sh created. A real directory at that path
+# is someone else's work — removing it isn't ours to do, and the failed rm
+# used to abort the script after the hooks were already gone.
+if [ -L "$ROOT/skills/rescue" ]; then
+  rm "$ROOT/skills/rescue"
+elif [ -e "$ROOT/skills/rescue" ]; then
+  echo "note: $ROOT/skills/rescue is not the symlink install.sh creates — left in place"
+fi
 echo "blackbox uninstalled from $ROOT (state in ~/.blackbox retained)"
