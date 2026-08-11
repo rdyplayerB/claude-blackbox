@@ -760,12 +760,20 @@ def cmd_doctor(as_json=False):
             wired = "blackbox" in open(sp, errors="ignore").read()
         except OSError:
             pass
-        # Plugin installs wire hooks without touching settings.json.
-        if not wired and os.path.isdir(os.path.join(root, "plugins", "cache")):
+        # Plugin installs wire hooks without touching settings.json. The
+        # registry is authoritative; the cache glob (marketplace/plugin/version
+        # layout) is the fallback for registry formats we don't know.
+        if not wired:
             try:
-                wired = any("blackbox" in d for d in os.listdir(os.path.join(root, "plugins", "cache")))
+                wired = "claude-blackbox" in open(
+                    os.path.join(root, "plugins", "installed_plugins.json"),
+                    errors="ignore").read()
             except OSError:
                 pass
+        if not wired:
+            import glob
+            wired = bool(glob.glob(os.path.join(
+                root, "plugins", "cache", "*", "claude-blackbox", "*", "bin", "blackbox")))
         if not wired:
             unwired.append(root.replace(HOME, "~"))
 
