@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # blackbox installer — wires the three hooks into a Claude config root's
-# settings.json and links the /rescue skill. Only NEW sessions are affected;
-# running sessions never re-read hooks, so installing is always safe to do live.
+# settings.json and links the /rescue skill. New sessions are protected
+# immediately; whether running sessions pick the hooks up varies by Claude
+# Code version. Installing is always safe to do live either way.
 #
 # settings.json has been destroyed by a careless tool on this machine before
 # (2026-07-27), so every write here is atomic (temp + rename after validation):

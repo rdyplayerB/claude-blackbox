@@ -119,8 +119,11 @@ fine; the CLI records its own location (`~/.blackbox/bin-path`) on every run,
 so the skill and hooks find it regardless of which path you chose or where the
 clone lives.
 
-Either way, only *new* sessions are affected; running ones never re-read
-hooks.
+New sessions are protected immediately either way. Whether an
+already-running session picks the hooks up varies by Claude Code version
+(observed both ways on one machine in one day), so restart any long-lived
+session you care about. Sessions that do fire a hook mid-life register
+themselves on their next completed turn.
 
 ## Use
 
