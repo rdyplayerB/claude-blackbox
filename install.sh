@@ -36,8 +36,16 @@ echo "backed up settings.json -> $BAK"
 
 python3 - "$SETTINGS" "$BB" <<'PY'
 import json, os, sys
-settings_path, bb = sys.argv[1], sys.argv[2]
-d = json.load(open(settings_path))
+# realpath: settings.json is a SYMLINK in dotfiles setups, and os.replace on
+# the link path would swap the link for a regular file — orphaning the
+# dotfiles copy, whose next sync would then silently remove these hooks.
+settings_path, bb = os.path.realpath(sys.argv[1]), sys.argv[2]
+try:
+    # utf-8-sig: tolerate a BOM some editors prepend.
+    d = json.load(open(settings_path, encoding="utf-8-sig"))
+except ValueError as e:
+    sys.exit(f"blackbox: {sys.argv[1]} is not valid JSON ({e}). "
+             "Fix it (or delete it) and re-run — nothing was changed.")
 hooks = d.setdefault("hooks", {})
 
 def ensure(event, cmd):

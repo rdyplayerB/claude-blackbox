@@ -15,8 +15,14 @@ cp "$SETTINGS" "$BAK"
 
 python3 - "$SETTINGS" <<'PY'
 import json, os, sys
-p = sys.argv[1]
-d = json.load(open(p))
+# realpath: keep a dotfiles symlink intact — os.replace on the link path
+# would swap the link for a regular file (see install.sh).
+p = os.path.realpath(sys.argv[1])
+try:
+    d = json.load(open(p, encoding="utf-8-sig"))
+except ValueError as e:
+    sys.exit(f"blackbox: {sys.argv[1]} is not valid JSON ({e}). "
+             "Nothing was changed.")
 hooks = d.get("hooks", {})
 for event in list(hooks):
     kept = []
