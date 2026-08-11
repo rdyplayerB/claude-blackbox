@@ -516,6 +516,14 @@ def hook_stop():
         if d.get("cwd") and d["cwd"] != mark.get("cwd"):
             mark["cwd"] = d["cwd"]
             mark["branch"] = _git_branch(d["cwd"])
+        # Heal the pid: markers written by pre-1.0.2 plugin hooks recorded a
+        # transient wrapper shell (observed in the wild as live sessions
+        # listed crashed). This hook only fires because the session is alive
+        # RIGHT NOW, so re-derive the pid rather than trusting history.
+        cur = _session_pid()
+        if cur and mark.get("pid") != cur:
+            _log("pid.heal", sid=sid[:8], old=mark.get("pid"), new=cur)
+            mark["pid"] = cur
         # Ground truth: after a completed turn, a saving session's transcript
         # holds real message records. A skeleton or missing file here means the
         # session is burning unrecoverable context RIGHT NOW — flagged so
@@ -615,6 +623,16 @@ def crashed_sessions():
         mark["last_assistant"] = a
         if kind == "ok":
             mark["resume"] = _resume_cmd(mark)
+        # A dead pid with a transcript written moments ago is contradictory
+        # evidence: something is still driving that conversation (a stale
+        # wrapper-pid marker, or a pid the tracker lost). Flag rather than
+        # hide — hiding would delay a real rescue, but resuming a live
+        # session collides with it.
+        try:
+            if time.time() - os.path.getmtime(tp) < 300:
+                mark["maybe_live"] = True
+        except OSError:
+            pass
         out.append(mark)
     out.sort(key=lambda m: -m.get("last_turn", 0))
     return out
@@ -682,6 +700,9 @@ def cmd_list(as_json=False, show_all=False):
             if m.get("salvageable"):
                 print(f"     partial: blackbox salvage {m['session_id']}   (title + prompt outline)")
             continue
+        if m.get("maybe_live"):
+            print("     ⚠ transcript written in the last 5 minutes — this session may")
+            print("       still be RUNNING (stale marker), not crashed. Check before resuming.")
         if m.get("last_user"):
             print(f"     you : {m['last_user']}")
         if m.get("last_assistant"):
@@ -706,6 +727,14 @@ def cmd_rescue():
         print("blackbox: that session is unrecoverable — the conversation was never saved."
               + (f" Try: blackbox salvage {sid}" if m.get("salvageable") else ""))
         return
+    if m.get("maybe_live"):
+        try:
+            sure = input("blackbox> its transcript was written minutes ago — the session "
+                         "may still be RUNNING. Resume anyway? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if sure != "y":
+            return
     # The exec below replaces this process, so this line is the only record of
     # exactly what was launched.
     _log("rescue", sid=sid[:8], cwd=m.get("cwd", ""),
