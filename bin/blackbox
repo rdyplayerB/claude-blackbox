@@ -838,21 +838,35 @@ def cmd_rescue():
         print(f"  {m.get('resume', '')}")
 
 
-def cmd_scan():
+def _project_slug(cwd):
+    """The directory name Claude Code stores a cwd's transcripts under:
+    every non-alphanumeric character becomes '-'."""
+    import re
+    return re.sub(r"[^A-Za-z0-9-]", "-", cwd)
+
+
+def cmd_scan(filter_cwd=None):
     """Registry-free sweep: newest transcripts in every storage root ever seen.
 
     For sessions that predate blackbox (no marker), this is how you find what
     exists at all — including per-profile roots that `claude --resume` alone
-    would never look in from a default shell.
+    would never look in from a default shell. With --cwd, only that project's
+    sessions are shown (all of them, not the newest-12 cap) — the /rescue
+    skill uses this to hunt for the current project's session and nothing
+    else.
     """
     now = time.time()
     scanned = {}
+    want = _project_slug(os.path.abspath(filter_cwd)) if filter_cwd else None
+    total_shown = 0
     for root in _all_roots():
         pdir = os.path.join(root, "projects")
         if not os.path.isdir(pdir):
             continue
         rows = []
         for proj in os.listdir(pdir):
+            if want and proj != want:
+                continue
             full = os.path.join(pdir, proj)
             if not os.path.isdir(full):
                 continue
@@ -868,8 +882,11 @@ def cmd_scan():
         rows.sort(reverse=True)
         label = root.replace(HOME, "~")
         scanned[label] = len(rows)
+        if want and not rows:
+            continue  # keep --cwd output free of empty-root noise
+        total_shown += len(rows)
         print(f"\n=== {label} — {len(rows)} substantive session(s) ===")
-        for mt, sz, proj, sid, p in rows[:12]:
+        for mt, sz, proj, sid, p in rows if want else rows[:12]:
             kind = _classify(p)
             print(f"  {_fmt_age(now - mt):>12}  {sz / 1e6:5.1f} MB  {proj}")
             if kind != "ok":
@@ -880,7 +897,9 @@ def cmd_scan():
                 print(f"                you : {u[:120]}")
             print(f"                resume: CLAUDE_CONFIG_DIR={shlex.quote(root)} "
                   f"claude --resume {shlex.quote(sid)}")
-    _log("scan", roots=scanned)
+    if want and total_shown == 0:
+        print(f"blackbox: no saved sessions found for {filter_cwd} in any known root.")
+    _log("scan", roots=scanned, cwd=filter_cwd or "")
 
 
 def _version():
@@ -1075,7 +1094,11 @@ def main():
     elif cmd == "rescue":
         cmd_rescue()
     elif cmd == "scan":
-        cmd_scan()
+        fc = None
+        if "--cwd" in args:
+            i = args.index("--cwd")
+            fc = args[i + 1] if len(args) > i + 1 else os.getcwd()
+        cmd_scan(filter_cwd=fc)
     elif cmd == "salvage" and len(args) > 1:
         cmd_salvage(args[1])
     elif cmd == "doctor":
