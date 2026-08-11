@@ -830,6 +830,19 @@ def cmd_scan():
     _log("scan", roots=scanned)
 
 
+def _version():
+    """This binary's plugin version, from the manifest beside it. Several
+    copies of blackbox can coexist (clone, per-root plugin caches, old cache
+    versions) and an hour was once lost to not knowing which one was
+    answering — so doctor states it up front."""
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.realpath(sys.argv[0])))
+        return json.load(open(os.path.join(
+            root, ".claude-plugin", "plugin.json"))).get("version", "?")
+    except Exception:
+        return "?"
+
+
 def cmd_doctor(as_json=False):
     """Is the recorder actually recording? Reads the log AND the world, because
     the one failure the log cannot contain is hooks not firing at all — that
@@ -931,12 +944,15 @@ def cmd_doctor(as_json=False):
         "sessions": {"live": live, "crashed_unrescued": crashed, "live_at_risk": hazards},
         "coverage_24h": {"recorded": covered, "missed": len(missed), "missed_detail": missed[:10]},
         "log": {"path": LOG, "lines": len(log)},
+        "blackbox": {"version": _version(),
+                     "bin": os.path.realpath(sys.argv[0])},
     }
     if as_json:
         print(json.dumps(report, indent=2))
         return
 
-    print("── blackbox doctor ──")
+    print(f"── blackbox doctor ── v{_version()} "
+          f"({os.path.realpath(sys.argv[0]).replace(HOME, '~')})")
     if unwired:
         print(f"  ✗ UNWIRED ROOT(S) — sessions there are completely unprotected:")
         for r in unwired:

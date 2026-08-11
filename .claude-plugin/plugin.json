@@ -1,7 +1,7 @@
 {
   "name": "claude-blackbox",
-  "version": "1.0.3",
-  "description": "Flight recorder + rescue for Claude Code sessions — know when a session died, resume it with full context, and get warned the moment a live session isn't saving its transcript.",
+  "version": "1.0.4",
+  "description": "Flight recorder + rescue for Claude Code sessions \u2014 know when a session died, resume it with full context, and get warned the moment a live session isn't saving its transcript.",
   "author": {
     "name": "rdyplayerB"
   },
