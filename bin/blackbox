@@ -1034,14 +1034,34 @@ def _session_record(root, tp, sid):
     return m
 
 
-def _find_session_anywhere(prefix):
-    """Resolve a session-id prefix to a resumable record: crashed markers
-    first, then a sweep of every storage root — so cleanly-closed sessions
-    (which leave no marker: closing a window IS a clean exit) are just as
-    rescuable by id as crashed ones."""
-    for m in crashed_sessions():
-        if m["session_id"].startswith(prefix):
-            return m
+def _alive_marker_sids():
+    out = set()
+    if os.path.isdir(LIVE):
+        for f in os.listdir(LIVE):
+            if f.endswith(".json"):
+                try:
+                    mk = json.load(open(os.path.join(LIVE, f)))
+                    if _alive(mk.get("pid"), mk.get("started_at")):
+                        out.add(mk.get("session_id", ""))
+                except Exception:
+                    continue
+    return out
+
+
+def _find_session_anywhere(prefix, max_matches=7):
+    """Resolve a session-id prefix across crashed markers and every storage
+    root — cleanly-closed sessions (no marker: closing a window IS a clean
+    exit) are as findable as crashed ones. Returns (records, truncated):
+    every distinct match up to the cap, each carrying an `alive` flag when a
+    live marker owns that sid. The caller decides what a unique / ambiguous /
+    running match means — resolving 'a' to one of 840 sessions silently, or
+    execing into a RUNNING session, were both real bugs here."""
+    alive = _alive_marker_sids()
+    crashed = {m["session_id"]: m for m in crashed_sessions()}
+    found = {}
+    for sid, m in crashed.items():
+        if sid.startswith(prefix):
+            found[sid] = m
     for root in _all_roots():
         pdir = os.path.join(root, "projects")
         if not os.path.isdir(pdir):
@@ -1051,9 +1071,18 @@ def _find_session_anywhere(prefix):
             if not os.path.isdir(full):
                 continue
             for f in sorted(os.listdir(full)):
-                if f.endswith(".jsonl") and f.startswith(prefix):
-                    return _session_record(root, os.path.join(full, f), f[:-6])
-    return None
+                if not f.endswith(".jsonl") or not f.startswith(prefix):
+                    continue
+                sid = f[:-6]
+                if sid in found:
+                    continue
+                if len(found) > max_matches:
+                    return list(found.values()), True
+                found[sid] = _session_record(root, os.path.join(full, f), sid)
+    for sid, m in found.items():
+        if sid in alive:
+            m["alive"] = True
+    return list(found.values()), False
 
 
 def _recent_sessions(cwd=None, limit=5):
@@ -1157,10 +1186,24 @@ def _print_picker(sessions, heading):
 
 def cmd_rescue(target=None):
     if target:
-        m = _find_session_anywhere(target)
-        if m is None:
+        matches, truncated = _find_session_anywhere(target)
+        if not matches:
             print(f"blackbox: no session matching {target!r} in markers or any "
                   "storage root. `blackbox scan --cwd <project>` lists what exists.")
+            return
+        if len(matches) > 1:
+            print(f"blackbox: {target!r} is ambiguous — "
+                  f"{len(matches)}{'+' if truncated else ''} sessions match:")
+            for m in matches[:7]:
+                proj = m.get("cwd", "?").replace(HOME, "~")
+                print(f"  {m['session_id']}  {proj}"
+                      + ("  [RUNNING]" if m.get("alive") else ""))
+            print("Give more of the id.")
+            return
+        m = matches[0]
+        if m.get("alive"):
+            print(f"blackbox: session {m['session_id'][:8]} is RUNNING right now — "
+                  "nothing to rescue. Find its window, or wait for it to exit.")
             return
         if m.get("unrecoverable"):
             print("blackbox: that session never saved a conversation — nothing to resume."
