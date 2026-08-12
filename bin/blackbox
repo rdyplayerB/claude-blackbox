@@ -700,6 +700,28 @@ def hook_start():
     return {"sid": sid[:8]}
 
 
+def _recent_clean_exit(sid, window=180):
+    """Did this sid log a clean_exit within the last few minutes? Tail-read
+    only; the log is append-only, so a torn last line is skipped harmlessly."""
+    try:
+        size = os.path.getsize(LOG)
+        with open(LOG, "rb") as f:
+            f.seek(max(0, size - 65536))
+            data = f.read().decode("utf-8", "ignore")
+    except OSError:
+        return False
+    now = time.time()
+    for line in data.split("\n"):
+        try:
+            e = json.loads(line)
+        except Exception:
+            continue
+        if e.get("event") == "clean_exit" and e.get("sid") == sid[:8] \
+                and now - e.get("ts", 0) <= window:
+            return True
+    return False
+
+
 def hook_stop():
     d = _read_stdin_json()
     sid = d.get("session_id", "")
@@ -720,6 +742,14 @@ def hook_stop():
     # Without this, "running sessions are unprotected until restarted" ; with
     # it, they join the flight record the first time they finish a turn.
     if existing is None:
+        # UNLESS this sid just exited cleanly: window close dispatches Stop and
+        # SessionEnd near-simultaneously, and a straggler Stop landing after
+        # SessionEnd's delete would resurrect the marker — a phantom "crashed"
+        # session that never clears (reproduced in a drill). A clean_exit for
+        # this sid in the recent log means dead session, not unseen one.
+        if _recent_clean_exit(sid):
+            _log("register.late.skipped", sid=sid[:8], reason="clean_exit moments ago")
+            return {"sid": sid[:8], "skipped": "post-exit straggler"}
         cwd = d.get("cwd") or os.getcwd()
         _remember_root(_config_dir())
         mark = {
