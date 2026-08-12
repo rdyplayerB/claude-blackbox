@@ -125,6 +125,23 @@ already-running session picks the hooks up varies by Claude Code version
 session you care about. Sessions that do fire a hook mid-life register
 themselves on their next completed turn.
 
+## Multiple accounts and profiles
+
+Install once and the whole machine is covered, including profiles that do
+not exist yet. Claude Code treats every `CLAUDE_CONFIG_DIR` as its own
+world with its own settings, so a plugin enabled in one profile does
+nothing for the others — a hole that once swallowed a session on this
+machine while diagnostics said everything was fine. blackbox closes it by
+wiring itself: at every session start it reads the `CLAUDE_CONFIG_DIR` of
+running claude processes, and any profile it has never wired before gets
+wired automatically (through the plugin system when installed, manual
+hooks otherwise; ~60ms, atomic, backed up).
+
+Intent always wins over convenience: each profile is auto-wired at most
+once, so disabling blackbox anywhere sticks; `uninstall.sh` writes
+`~/.blackbox/no-autowire`, which stops all auto-wiring until you delete
+it. `blackbox doctor` reports any profile that is active but unwired.
+
 ## Use
 
 After a crash / force-quit / app death:

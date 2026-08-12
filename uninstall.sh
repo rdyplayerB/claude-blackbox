@@ -63,4 +63,11 @@ if [ -L "$ROOT/skills/rescue" ]; then
 elif [ -e "$ROOT/skills/rescue" ]; then
   echo "note: $ROOT/skills/rescue is not the symlink install.sh creates — left in place"
 fi
+
+# An uninstall is explicit intent: stop the auto-wirer from re-wiring this
+# machine behind the user's back (hooks in still-running sessions would
+# otherwise resurrect the install within minutes).
+mkdir -p "$HOME/.blackbox"
+touch "$HOME/.blackbox/no-autowire"
+echo "auto-wiring disabled (~/.blackbox/no-autowire; delete that file to re-enable)"
 echo "blackbox uninstalled from $ROOT (state in ~/.blackbox retained)"

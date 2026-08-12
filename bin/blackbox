@@ -213,6 +213,156 @@ def _write_marker(path, mark):
     os.replace(tmp, path)
 
 
+# --- auto-wiring -------------------------------------------------------------
+# One install must cover the whole machine, including CLAUDE_CONFIG_DIR
+# profiles that do not exist yet. Installation is machine-shared but
+# enablement is per-root settings, and a five-hour unprotected hole (a
+# session crashed in it markerless) proved that "install once per root" is a
+# promise users cannot keep. So every session start discovers sibling roots
+# from the environments of running claude processes and wires any root that
+# was never wired before. Explicit intent is respected: an uninstall writes
+# an opt-out flag, and a root is auto-wired at most once ever — disable it
+# afterward and it stays disabled.
+
+AUTOWIRED = os.path.join(STATE, "autowired.json")
+NO_AUTOWIRE = os.path.join(STATE, "no-autowire")
+
+
+def _root_wired(root):
+    """Protection is decided ONLY by the root's own settings.json: manual
+    hook commands, or a truthy blackbox enabledPlugins entry."""
+    try:
+        s = json.load(open(os.path.join(root, "settings.json"),
+                           encoding="utf-8-sig"))
+    except Exception:
+        return False
+    for entries in s.get("hooks", {}).values():
+        for entry in entries if isinstance(entries, list) else []:
+            for h in entry.get("hooks", []):
+                if '/bin/blackbox" hook' in h.get("command", ""):
+                    return True
+    ep = s.get("enabledPlugins", {})
+    return isinstance(ep, dict) and any(
+        "blackbox@" in k and bool(v) for k, v in ep.items())
+
+
+def _discover_roots():
+    """CLAUDE_CONFIG_DIR of every running claude process, via `ps eww` (env
+    is visible for same-user processes on macOS and most Linuxes). Any
+    profile that runs a session while any protected session lives gets
+    discovered — no configuration, no tool-specific paths."""
+    import re
+    found = set()
+    try:
+        out = subprocess.run(["ps", "ewwax", "-o", "command="],
+                             capture_output=True, text=True, timeout=3).stdout
+        for line in out.splitlines():
+            if "claude" not in line:
+                continue
+            m = re.search(r"CLAUDE_CONFIG_DIR=(\S+)", line)
+            if m and os.path.isdir(m.group(1)):
+                found.add(os.path.realpath(m.group(1)))
+    except Exception:
+        pass
+    return found
+
+
+def _plugin_installed_anywhere():
+    """Does any root's registry know the blackbox plugin? (The registry is
+    machine-shared in practice; checking every known root covers the rest.)"""
+    for root in [os.path.join(HOME, ".claude")] + list(_all_roots()):
+        try:
+            if "blackbox@" in open(
+                    os.path.join(root, "plugins", "installed_plugins.json"),
+                    errors="ignore").read():
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _wire_root(root):
+    """Wire one root through its settings.json, atomically and backed up.
+    Prefer plugin enablement (updates keep flowing through the marketplace);
+    fall back to manual hook commands pointing at this binary."""
+    sp = os.path.join(root, "settings.json")
+    sp_real = os.path.realpath(sp) if os.path.exists(sp) else sp
+    try:
+        s = json.load(open(sp_real, encoding="utf-8-sig")) if os.path.exists(sp_real) else {}
+    except ValueError:
+        return False  # never auto-edit a file we cannot parse
+    if os.path.exists(sp_real):
+        try:
+            import shutil
+            shutil.copy2(sp_real, sp_real + ".bak-blackbox-autowire")
+        except OSError:
+            return False
+    if _plugin_installed_anywhere():
+        s.setdefault("enabledPlugins", {})["blackbox@rdyplayerB"] = True
+        mode = "plugin"
+    else:
+        me = os.path.realpath(os.path.abspath(sys.argv[0]))
+        hooks = s.setdefault("hooks", {})
+        for event, sub in (("SessionStart", "start"), ("Stop", "stop"),
+                           ("SessionEnd", "end")):
+            entries = hooks.setdefault(event, [])
+            if any('/bin/blackbox" hook' in h.get("command", "")
+                   for e in entries for h in e.get("hooks", [])):
+                continue
+            entries.append({"hooks": [{"type": "command",
+                                       "command": f'"{me}" hook {sub}'}]})
+        mode = "manual"
+    tmp = sp_real + ".blackbox-tmp"
+    with open(tmp, "w") as f:
+        json.dump(s, f, indent=2)
+    json.load(open(tmp))
+    os.replace(tmp, sp_real)
+    _log("autowire", root=root.replace(HOME, "~"), mode=mode)
+    return True
+
+
+def _autowire():
+    """Called at session start. Discover sibling roots, wire any that were
+    never wired — at most once per root, never after an opt-out."""
+    try:
+        if os.path.exists(NO_AUTOWIRE):
+            return
+        done = {}
+        try:
+            loaded = json.load(open(AUTOWIRED))
+            if isinstance(loaded, dict):
+                done = loaded
+        except Exception:
+            pass
+        candidates = _discover_roots()
+        candidates.update(os.path.realpath(r) for r in _all_roots())
+        changed = False
+        for root in candidates:
+            if root in done:
+                continue
+            if _root_wired(root):
+                # Seen wired once: if the user later unwires it, that choice
+                # sticks — we never re-wire a root behind their back.
+                done[root] = time.time()
+                changed = True
+                continue
+            _remember_root(root)
+            try:
+                if _wire_root(root):
+                    done[root] = time.time()
+                    changed = True
+            except Exception:
+                import traceback
+                _log("autowire", root=root.replace(HOME, "~"), ok=False,
+                     err=traceback.format_exc()[-800:])
+        if changed:
+            tmp = AUTOWIRED + ".tmp"
+            json.dump(done, open(tmp, "w"))
+            os.replace(tmp, AUTOWIRED)
+    except Exception:
+        pass  # wiring convenience must never break a session
+
+
 def _git_branch(cwd):
     try:
         out = subprocess.run(
@@ -441,6 +591,9 @@ def hook_start():
     cwd = d.get("cwd") or os.getcwd()
     cfg = _config_dir()
     _remember_root(cfg)
+    # One install covers the machine: discover sibling profiles and wire any
+    # root never wired before (see the auto-wiring section for the rules).
+    _autowire()
     mark = {
         "session_id": sid,
         "cwd": cwd,
