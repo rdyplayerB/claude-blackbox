@@ -13,6 +13,9 @@ store transcripts in non-default roots), and last exchange known.
 **Voice: short and surgical.** The user is here for ONE thing: the session
 that died in THIS project. A few short lines, then the command. Never list
 sessions from other projects, never pad with caveats they didn't ask about.
+Speak in Claude Code terms, not aviation terms: open with something like
+"Checking your recent Claude Code sessions…" — never "checking the flight
+recorder" or other black-box jargon. The tool's internals stay internal.
 
 ## Steps
 
