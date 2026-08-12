@@ -236,7 +236,7 @@ difference is finding, not restoring:
 | Sessions in the current project and profile | ✓ picker | ✓ picker |
 | Sessions in other project folders | hidden by default (Ctrl+A widens) | ✓ Tab scope in the picker |
 | Sessions under another `CLAUDE_CONFIG_DIR` profile | invisible | ✓ sweeps every root ever seen |
-| Set cwd and profile for the resumed session | you arrange both by hand | ✓ `rescue <id>` does cd + config dir + exec |
+| Set cwd, profile, and launch flags for the resumed session | you arrange them by hand | ✓ `rescue <id>` does cd + config dir + original flags (permission mode, model) + exec |
 | Warn a live session that it is not saving | no | ✓ start-of-session guard |
 | When nothing was ever saved | nothing to offer | outline recovery via `salvage` |
 

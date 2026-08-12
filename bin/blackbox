@@ -25,6 +25,7 @@ Commands:
 
 import json
 import os
+import re
 import shlex
 import sys
 import time
@@ -574,6 +575,48 @@ def _fmt_age(sec):
     return f"{sec // 86400}d {sec % 86400 // 3600}h ago"
 
 
+def _launch_flags(pid):
+    """The flags the session was originally launched with, read from the live
+    process — the whitelisted ones that shape how the session behaves and are
+    safe to repeat. A rescue that drops --dangerously-skip-permissions hands
+    back a session that suddenly asks permission for everything (observed in
+    production); resume restores the conversation, but launch flags belong to
+    the process, so the marker has to carry them."""
+    if not pid:
+        return []
+    try:
+        out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=5)
+        toks = shlex.split(out.stdout.strip())
+    except Exception:
+        return []
+    return _filter_launch_flags(toks)
+
+
+def _filter_launch_flags(toks):
+    """Keep only flags that are known, behavior-shaping, and repeat-safe.
+    Applied both when recording (from ps) and again before exec (markers are
+    plain files; never exec what a marker says without re-checking)."""
+    bare = {"--dangerously-skip-permissions", "--fast"}
+    valued = {"--permission-mode", "--model"}
+    flags = []
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t in bare:
+            flags.append(t)
+        elif t in valued and i + 1 < len(toks) \
+                and re.fullmatch(r"[A-Za-z0-9._:-]+", toks[i + 1]):
+            flags += [t, toks[i + 1]]
+            i += 1
+        elif "=" in t:
+            k, v = t.split("=", 1)
+            if k in valued and re.fullmatch(r"[A-Za-z0-9._:-]+", v):
+                flags += [k, v]
+        i += 1
+    return flags
+
+
 def _resume_cmd(mark):
     """The exact incantation that brings this session back. shlex-quoted, so a
     path with spaces, quotes, or $ survives the copy-paste. The config root is
@@ -585,6 +628,7 @@ def _resume_cmd(mark):
     if cd:
         parts.append(f"CLAUDE_CONFIG_DIR={shlex.quote(cd)}")
     parts += ["claude", "--resume", shlex.quote(mark["session_id"])]
+    parts += _filter_launch_flags(mark.get("launch_flags", []))
     return f"cd {shlex.quote(mark.get('cwd', '.'))} && " + " ".join(parts)
 
 
@@ -624,6 +668,9 @@ def hook_start():
         "started_at": time.time(),
         "last_turn": time.time(),
     }
+    # Rescue must re-launch with the same behavior-shaping flags (permission
+    # mode, model); the conversation alone is not the whole session.
+    mark["launch_flags"] = _launch_flags(mark["pid"])
     _write_marker(os.path.join(LIVE, sid + ".json"), mark)
     _log("register", sid=sid[:8], cwd=cwd, has_transcript_path=bool(d.get("transcript_path")))
 
@@ -686,6 +733,7 @@ def hook_stop():
             "last_turn": time.time(),
             "registered_late": True,
         }
+        mark["launch_flags"] = _launch_flags(mark["pid"])
         try:
             os.makedirs(LIVE, exist_ok=True)
             _write_marker(p, mark)
@@ -716,6 +764,10 @@ def hook_stop():
         if cur and mark.get("pid") != cur:
             _log("pid.heal", sid=sid[:8], old=mark.get("pid"), new=cur)
             mark["pid"] = cur
+            mark["launch_flags"] = _launch_flags(cur)
+        elif "launch_flags" not in mark:
+            # Marker written by a version that predates flag capture.
+            mark["launch_flags"] = _launch_flags(mark.get("pid"))
         # Ground truth: after a completed turn, a saving session's transcript
         # holds real message records. A skeleton or missing file here means the
         # session is burning unrecoverable context RIGHT NOW — flagged so
@@ -978,18 +1030,39 @@ def _exec_resume(m):
         print(f"blackbox: original cwd {m.get('cwd', '?')!r} no longer exists; "
               "resuming from ~ instead.")
         os.chdir(HOME)
-    # Replace this process with the resumed session — the terminal becomes claude.
+    # Replace this process with the resumed session — the terminal becomes
+    # claude. PATH is whatever environment this was invoked from, and two
+    # production rescues died in 2ms because that environment could not find
+    # `claude` (a shell alias, a stripped PATH). So after the PATH attempt,
+    # fall back to the places claude actually lives.
+    last_err = None
+    # Re-launch with the flags the dead session actually ran with (permission
+    # mode, model): a rescue that drops --dangerously-skip-permissions hands
+    # back a session that interrogates its owner. Filtered again here; the
+    # marker is a plain file and is not trusted to name arbitrary argv.
+    argv_tail = ["--resume", sid] + _filter_launch_flags(m.get("launch_flags", []))
     try:
-        os.execvpe("claude", ["claude", "--resume", sid], env)
-    except OSError:
-        if had_marker:
+        os.execvpe("claude", ["claude"] + argv_tail, env)
+    except OSError as e:
+        last_err = e
+    for cand in [os.path.expanduser(p) for p in
+                 ("~/.local/bin/claude", "~/.claude/local/claude")] + [
+                 "/opt/homebrew/bin/claude", "/usr/local/bin/claude",
+                 "/usr/bin/claude"]:
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
             try:
-                os.replace(consumed, mp)  # restore the crash record
-            except OSError:
-                pass
-        _log("rescue.exec", sid=sid[:8], ok=False)
-        print("blackbox: could not exec `claude` (not on PATH?). Run this by hand:")
-        print(f"  {m.get('resume', '')}")
+                os.execve(cand, [cand] + argv_tail, env)
+            except OSError as e:
+                last_err = e
+    if had_marker:
+        try:
+            os.replace(consumed, mp)  # restore the crash record
+        except OSError:
+            pass
+    _log("rescue.exec", sid=sid[:8], ok=False,
+         err=f"{type(last_err).__name__}: {last_err}")
+    print("blackbox: could not exec `claude` (not on PATH?). Run this by hand:")
+    print(f"  {m.get('resume', '')}")
 
 
 def _last_activity(tp):
@@ -1582,6 +1655,7 @@ def cmd_doctor(as_json=False):
     seen = {e.get("sid") for e in log if e.get("sid")}
     missed = []
     covered = 0
+    machinery_ignored = 0
     for root in _all_roots():
         pdir = os.path.join(root, "projects")
         if not os.path.isdir(pdir):
@@ -1589,6 +1663,18 @@ def cmd_doctor(as_json=False):
         for proj in os.listdir(pdir):
             full = os.path.join(pdir, proj)
             if not os.path.isdir(full):
+                continue
+            if "claude-mem-observer" in proj:
+                # Observer sidecar sessions churn constantly and are hidden
+                # from every other surface; counting them here buried real
+                # coverage misses under hundreds of machinery rows.
+                for f in os.listdir(full):
+                    if f.endswith(".jsonl"):
+                        try:
+                            if os.stat(os.path.join(full, f)).st_mtime >= day_ago:
+                                machinery_ignored += 1
+                        except OSError:
+                            pass
                 continue
             for f in os.listdir(full):
                 if not f.endswith(".jsonl"):
@@ -1649,7 +1735,9 @@ def cmd_doctor(as_json=False):
         "last_error": (errors[-1] if errors else None),
         "slow_hooks_over_2s": len(slow),
         "sessions": {"live": live, "crashed_unrescued": crashed, "live_at_risk": hazards},
-        "coverage_24h": {"recorded": covered, "missed": len(missed), "missed_detail": missed[:10]},
+        "coverage_24h": {"recorded": covered, "missed": len(missed),
+                         "machinery_ignored": machinery_ignored,
+                         "missed_detail": missed[:10]},
         "log": {"path": LOG, "lines": len(log)},
         "blackbox": {"version": _version(),
                      "bin": os.path.realpath(sys.argv[0])},
@@ -1691,14 +1779,18 @@ def cmd_doctor(as_json=False):
         print(f"  ! {len(slow)} hook run(s) over 2s — a slow hook delays every session")
     print(f"  sessions now: {live} live ({hazards} NOT SAVING), {crashed} crashed awaiting rescue")
     cov = report["coverage_24h"]
+    mach = f" ({cov['machinery_ignored']} machinery sessions ignored)" \
+        if cov.get("machinery_ignored") else ""
     if cov["missed"]:
-        print(f"  ✗ coverage: {cov['missed']} session(s) active in 24h that blackbox never saw:")
+        print(f"  ✗ coverage: {cov['missed']} session(s) active in 24h that "
+              f"blackbox never saw{mach}:")
         for m in cov["missed_detail"]:
             print(f"      {m['project']}  ({m['root']}, last write {m['last_write']})")
         print("    Causes: session predates install, hooks not wired for that")
         print("    CLAUDE_CONFIG_DIR, or hooks failing before their first log line.")
     else:
-        print(f"  ✓ coverage: all {cov['recorded']} active session(s) in 24h were recorded")
+        print(f"  ✓ coverage: all {cov['recorded']} active session(s) in 24h "
+              f"were recorded{mach}")
     print(f"  log: {LOG} ({len(log)} lines)")
 
 
