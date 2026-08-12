@@ -228,22 +228,30 @@ AUTOWIRED = os.path.join(STATE, "autowired.json")
 NO_AUTOWIRE = os.path.join(STATE, "no-autowire")
 
 
-def _root_wired(root):
-    """Protection is decided ONLY by the root's own settings.json: manual
-    hook commands, or a truthy blackbox enabledPlugins entry."""
+def _root_wiring(root):
+    """(manual, plugin) wiring signals from the root's own settings.json —
+    the only file that decides protection. BOTH true means every hook fires
+    twice, a state the README warns about and doctor must catch."""
+    manual = plugin = False
     try:
         s = json.load(open(os.path.join(root, "settings.json"),
                            encoding="utf-8-sig"))
     except Exception:
-        return False
+        return False, False
     for entries in s.get("hooks", {}).values():
         for entry in entries if isinstance(entries, list) else []:
             for h in entry.get("hooks", []):
                 if '/bin/blackbox" hook' in h.get("command", ""):
-                    return True
+                    manual = True
     ep = s.get("enabledPlugins", {})
-    return isinstance(ep, dict) and any(
+    plugin = isinstance(ep, dict) and any(
         "blackbox@" in k and bool(v) for k, v in ep.items())
+    return manual, plugin
+
+
+def _root_wired(root):
+    manual, plugin = _root_wiring(root)
+    return manual or plugin
 
 
 def _discover_roots():
@@ -1411,28 +1419,17 @@ def cmd_doctor(as_json=False):
     # under root A records enablement in A's settings, not the root the user
     # believed they were installing for).
     unwired = []
+    doubled = []
     for root in _all_roots():
-        sp = os.path.join(root, "settings.json")
-        wired = False
-        try:
-            s = json.load(open(sp, encoding="utf-8-sig"))
-            for entries in s.get("hooks", {}).values():
-                for entry in entries:
-                    for h in entry.get("hooks", []):
-                        if '/bin/blackbox" hook' in h.get("command", ""):
-                            wired = True
-            if not wired:
-                ep = s.get("enabledPlugins", {})
-                if isinstance(ep, dict):
-                    wired = any("blackbox@" in k and bool(v)
-                                for k, v in ep.items())
-        except Exception:
-            pass
-        if not wired:
+        manual, plugin = _root_wiring(root)
+        if not (manual or plugin):
             unwired.append(root.replace(HOME, "~"))
+        elif manual and plugin:
+            doubled.append(root.replace(HOME, "~"))
 
     report = {
         "unwired_roots": unwired,
+        "double_wired_roots": doubled,
         "hooks_fired_24h": counts,
         "hook_errors_24h": len(errors),
         "last_error": (errors[-1] if errors else None),
@@ -1461,6 +1458,10 @@ def cmd_doctor(as_json=False):
             print(f"        (or, from a clone: ./install.sh {r})")
     else:
         print("  ✓ every known root has hooks wired")
+    for r in doubled:
+        print(f"  ✗ DOUBLE-WIRED: {r} has BOTH manual hooks and the plugin —")
+        print(f"    every hook fires twice there. Fix: ./uninstall.sh {r}")
+        print(f"    (removes the manual hooks; the plugin install stays)")
     hooks_24h = sum(v for k, v in counts.items() if k.startswith("hook."))
     print(f"  hooks fired (24h): {hooks_24h}  {dict(sorted(counts.items()))}")
     if errors:
