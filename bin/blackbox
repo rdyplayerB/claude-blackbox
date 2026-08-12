@@ -1464,10 +1464,14 @@ def cmd_doctor(as_json=False):
     hooks_24h = sum(v for k, v in counts.items() if k.startswith("hook."))
     print(f"  hooks fired (24h): {hooks_24h}  {dict(sorted(counts.items()))}")
     if errors:
-        print(f"  ✗ {len(errors)} hook error(s) — most recent:")
-        print("    " + str(errors[-1].get("err", ""))[:300].replace("\n", "\n    "))
+        last = errors[-1]
+        print(f"  ✗ {len(errors)} failed operation(s) — most recent: "
+              f"{last.get('event', '?')}"
+              + (f" sid={last['sid']}" if last.get("sid") else ""))
+        if last.get("err"):
+            print("    " + str(last["err"])[:300].replace("\n", "\n    "))
     else:
-        print("  ✓ no hook errors in 24h")
+        print("  ✓ no failed operations in 24h")
     if slow:
         print(f"  ! {len(slow)} hook run(s) over 2s — a slow hook delays every session")
     print(f"  sessions now: {live} live ({hazards} NOT SAVING), {crashed} crashed awaiting rescue")
