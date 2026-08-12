@@ -555,6 +555,16 @@ def cmd_salvage(target):
     print(out)
 
 
+def _fmt_tminus(sec):
+    """T-minus from now in the single coarsest unit: T-45m, T-8h, T-3d."""
+    sec = int(max(0, sec))
+    if sec < 3600:
+        return f"T-{max(1, sec // 60)}m"
+    if sec < 86400:
+        return f"T-{sec // 3600}h"
+    return f"T-{sec // 86400}d"
+
+
 def _fmt_age(sec):
     sec = int(max(0, sec))
     if sec < 3600:
@@ -1291,8 +1301,8 @@ def _picker_ui(stdscr, state):
         put(1, max(0, w - len(scope_tag) - 2), scope_tag)
         for i, r in enumerate(matches[top:top + vis_cap]):
             e = _enrich_box(cache, r, crashed_sids)
-            line = (f"{_fmt_age(e['age']):>10}  {r[4][:18]:18} "
-                    f"{e['ended']:7} {e['gist']}")
+            line = (f"{_fmt_tminus(e['age']):>6}  {e['ended']:7} "
+                    f"{r[4][:14]:14} {e['gist']}")
             attr = curses.A_REVERSE if top + i == cursor else curses.A_NORMAL
             marker = "▸ " if top + i == cursor else "  "
             put(2 + i, 0, (marker + line), attr)
@@ -1389,7 +1399,7 @@ def _print_picker(sessions, heading):
         if m.get("maybe_live"):
             flags.append("⚠ may be running")
         flag = ("  [" + ", ".join(flags) + "]") if flags else ""
-        print(f"[{i}] {_fmt_age(m.get('age', now)):>10}  {m.get('ended', '?'):14} "
+        print(f"[{i}] {_fmt_tminus(m.get('age', 0)):>6}  {m.get('ended', '?'):7} "
               f"{proj}{flag}")
         gist = m.get("last_user") or m.get("last_assistant") or ""
         if gist:

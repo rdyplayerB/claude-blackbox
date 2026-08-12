@@ -43,21 +43,33 @@ recorder" or other black-box jargon. The tool's internals stay internal.
      cleanly-closed ones and ones from before blackbox was installed.
    Everything from other projects does not exist as far as this conversation
    is concerned — never list it, never summarize it, never offer it.
-4. **Present the boxes as a selection, not prose.** Use the question tool
-   (AskUserQuestion or equivalent selectable-options UI) with up to four of
-   the most recent sessions as options, newest first:
-   - option label: a 2-5 word gist of what the session was doing
-   - option description: how it ended ("crashed" / "closed cleanly"), how
-     long ago, plus the warnings below when they apply
-   - the built-in free-text option covers "none of these": treat the user's
-     typed text as a session-id prefix or a phrase to search `"$BB" scan
-     --cwd "$PWD"` output for.
+4. **Present the boxes as a selection, not prose — and every option in ONE
+   fixed shape.** Use the question tool (AskUserQuestion or equivalent
+   selectable-options UI) with as many session options as it allows (aim
+   for eight; if capped lower, the newest win), newest first. Use the
+   selector even when there is only ONE candidate. The shape, with no
+   deviations and no extra facts:
+   - label: `T-<age> · <crashed|closed> · <2-4 word gist>`
+     where age is T-minus from now in the single coarsest unit: `T-45m`,
+     `T-8h`, `T-3d`. Examples:
+       `T-8h · crashed · Reel studio preview`
+       `T-3d · closed · diagram controls audit`
+   - description: ONE line, what the session was doing, drawn from its last
+     exchange. BANNED everywhere in the selector: file sizes, turn counts,
+     token counts, config-profile notes, resume advice, and any
+     "most recent real work" style commentary — all of that belongs AFTER
+     selection or nowhere. The only permitted extra is a trailing
+     `⚠ may still be running` or `✗ never saved` when the session carries
+     that flag.
+   - the built-in free-text option covers "none of these": treat typed text
+     as a session-id prefix or a phrase to search `"$BB" scan --cwd "$PWD"`
+     output for, then re-present matches the same way.
    When the user picks one, deliver step 4b for exactly that session. If the
-   selection UI is unavailable, fall back to a compact table (one line per
-   box: age, ended, gist, command) — never paragraphs.
-   Warnings that ride along wherever the session appears:
+   selection UI is genuinely unavailable, fall back to a compact table with
+   the SAME columns (T-age, status, gist) — never paragraphs.
+   Flag meanings, applied at selection time:
    - `maybe_live: true`: evidence says it may still be running; confirm its
-     window is really gone first.
+     window is really gone before resuming.
    - `unrecoverable: true`: the conversation was never saved and nothing can
      restore it; offer `"$BB" salvage <session-id>` only if `salvageable`
      is true. Do not invent hope.
