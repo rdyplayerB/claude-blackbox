@@ -138,9 +138,11 @@ wired automatically (through the plugin system when installed, manual
 hooks otherwise; ~60ms, atomic, backed up).
 
 Intent always wins over convenience: each profile is auto-wired at most
-once, so disabling blackbox anywhere sticks; `uninstall.sh` writes
-`~/.blackbox/no-autowire`, which stops all auto-wiring until you delete
-it. `blackbox doctor` reports any profile that is active but unwired.
+once, so disabling blackbox anywhere sticks; `uninstall.sh <root>` removes
+that root's wiring whichever kind it is (manual hooks or the plugin
+enablement the auto-wirer creates) and writes `~/.blackbox/no-autowire`,
+which stops all auto-wiring until you delete it. `blackbox doctor` reports
+any profile that is active but unwired.
 
 ## Use
 

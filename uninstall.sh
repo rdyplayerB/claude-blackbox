@@ -38,6 +38,17 @@ for event in list(hooks):
         hooks[event] = kept
     else:
         del hooks[event]
+# A root wired through the plugin system has no manual hooks at all — its
+# wiring is an enabledPlugins entry (that is also how the auto-wirer wires
+# roots when the plugin is installed). Leaving it meant "uninstalled" while
+# every hook kept firing. Enablement is per root; the shared plugin cache
+# stays, which is `claude plugin uninstall`'s job, not ours.
+ep = d.get("enabledPlugins", {})
+plugin_removed = [k for k in list(ep) if k.split("@")[0] == "blackbox"]
+for k in plugin_removed:
+    del ep[k]
+if not ep and "enabledPlugins" in d and plugin_removed:
+    del d["enabledPlugins"]
 # Atomic: validate the temp file, then rename. A mid-write failure leaves
 # settings.json untouched.
 tmp = p + ".blackbox-tmp"
@@ -46,6 +57,10 @@ with open(tmp, "w") as f:
 json.load(open(tmp))
 os.replace(tmp, p)
 print("blackbox hooks removed")
+if plugin_removed:
+    print(f"plugin enablement removed for this root: {', '.join(plugin_removed)}")
+    print("(the plugin itself is machine-shared and may serve other roots; "
+          "remove it entirely with: claude plugin uninstall blackbox@rdyplayerB)")
 PY
 
 # Belt and braces: never leave an unparseable settings.json behind.
