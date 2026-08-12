@@ -16,8 +16,9 @@ Wired in as three hooks (see install.sh):
   SessionEnd   -> blackbox hook end     clean exit: remove marker
 
 Commands:
+  blackbox                 the Black Box Picker: type to filter, Enter resumes
   blackbox list [--json]   crashed sessions (marker present, pid dead)
-  blackbox rescue          interactive picker; execs the resume in your shell
+  blackbox rescue [id]     picker, or resume a session id directly
   blackbox scan            registry-free sweep of every known storage root
   blackbox doctor          is the recorder recording? hooks, errors, coverage
 """
@@ -1174,6 +1175,201 @@ def _recent_sessions(cwd=None, limit=5):
     return out
 
 
+def _gather_boxes(cwd=None, cap=400):
+    """Cheap candidate rows for the picker: (mtime, root, tp, sid, project),
+    newest first, live sessions and machinery excluded. Enrichment (real
+    age, gist, ended-how) happens lazily per displayed row — this must stay
+    fast with years of history on disk."""
+    alive = _alive_marker_sids()
+    crashed_sids = set()
+    if os.path.isdir(LIVE):
+        for f in os.listdir(LIVE):
+            if f.endswith(".json"):
+                try:
+                    mk = json.load(open(os.path.join(LIVE, f)))
+                    if mk.get("session_id") not in alive:
+                        crashed_sids.add(mk.get("session_id"))
+                except Exception:
+                    continue
+    want = _project_slug(os.path.abspath(cwd)) if cwd else None
+    rows = []
+    for root in _all_roots():
+        pdir = os.path.join(root, "projects")
+        if not os.path.isdir(pdir):
+            continue
+        for proj in os.listdir(pdir):
+            if want and proj != want:
+                continue
+            if "claude-mem-observer" in proj:
+                continue
+            full = os.path.join(pdir, proj)
+            if not os.path.isdir(full):
+                continue
+            for f in os.listdir(full):
+                if not f.endswith(".jsonl"):
+                    continue
+                sid = f[:-6]
+                if sid in alive:
+                    continue
+                tp = os.path.join(full, f)
+                try:
+                    st = os.stat(tp)
+                except OSError:
+                    continue
+                if st.st_size <= 50_000 and sid not in crashed_sids:
+                    continue
+                rows.append((st.st_mtime, root, tp, sid,
+                             proj.split("-")[-1] or proj))
+    rows.sort(reverse=True)
+    return rows[:cap], crashed_sids
+
+
+def _enrich_box(cache, row, crashed_sids):
+    """Fill one picker row's display fields, memoized."""
+    mt, root, tp, sid = row[0], row[1], row[2], row[3]
+    if sid in cache:
+        return cache[sid]
+    act = _last_activity(tp)
+    u, a = _preview(tp, tail_bytes=64_000)
+    e = {"age": time.time() - (act or mt),
+         "gist": (u or a or "").replace("\n", " ")[:80],
+         "ended": "crashed" if sid in crashed_sids else "closed"}
+    cache[sid] = e
+    return e
+
+
+def _picker_ui(stdscr, state):
+    """The Black Box Picker: one line per box, type to filter, Enter to
+    resume. Filtering replaces scrolling — that is what makes unlimited
+    history navigable."""
+    import curses
+    curses.curs_set(0)
+    stdscr.timeout(-1)
+    filt = ""
+    cursor = 0
+    while True:
+        rows, crashed_sids, cache, scope = (state["rows"], state["crashed"],
+                                            state["cache"], state["scope"])
+        h, w = stdscr.getmaxyx()
+        vis_cap = max(3, h - 5)
+        if filt:
+            f = filt.lower()
+            matches = []
+            for r in rows:
+                if f in r[4].lower() or f in r[3][:12].lower():
+                    matches.append(r)
+                    continue
+                e = cache.get(r[3])
+                if e and f in e["gist"].lower():
+                    matches.append(r)
+            # content-match rows not yet enriched, up to a budget
+            budget = 200
+            for r in rows:
+                if r in matches or budget <= 0:
+                    continue
+                budget -= 1
+                e = _enrich_box(cache, r, crashed_sids)
+                if f in e["gist"].lower():
+                    matches.append(r)
+        else:
+            matches = list(rows)
+        cursor = max(0, min(cursor, len(matches) - 1))
+        top = max(0, cursor - vis_cap + 1)
+        stdscr.erase()
+        title = " BLACK BOXES "
+        stdscr.addnstr(0, 0, ("▄▄▄" + title + "▄" * w)[:w - 1], w - 1)
+        scope_tag = "[Tab: everywhere]" if scope == "here" else "[Tab: this project]"
+        stdscr.addnstr(1, 1, f"filter: {filt}_", w - 22)
+        stdscr.addnstr(1, max(0, w - len(scope_tag) - 2), scope_tag, len(scope_tag))
+        for i, r in enumerate(matches[top:top + vis_cap]):
+            e = _enrich_box(cache, r, crashed_sids)
+            line = (f"{_fmt_age(e['age']):>10}  {r[4][:18]:18} "
+                    f"{e['ended']:7} {e['gist']}")
+            attr = curses.A_REVERSE if top + i == cursor else curses.A_NORMAL
+            marker = "▸ " if top + i == cursor else "  "
+            stdscr.addnstr(2 + i, 0, (marker + line), w - 1, attr)
+        foot = (f" {len(matches)} of {len(rows)} boxes · Enter resume · "
+                "Esc clear/quit · Tab scope ")
+        stdscr.addnstr(min(h - 2, 2 + vis_cap), 0, foot[:w - 1], w - 1)
+        stdscr.addnstr(min(h - 1, 3 + vis_cap), 0, ("▀" * w)[:w - 1], w - 1)
+        stdscr.refresh()
+        ch = stdscr.getch()
+        if ch in (curses.KEY_UP,):
+            cursor -= 1
+        elif ch in (curses.KEY_DOWN,):
+            cursor += 1
+        elif ch == 27:
+            # A bare ESC quits/clears — but arrow keys ARRIVE as ESC [ A/B
+            # when keypad translation is unavailable, and treating their lead
+            # byte as Esc made the first arrow press exit the picker (found
+            # by driving the UI through a pty). Peek: sequence bytes present
+            # means a key, silence means the user really pressed Esc.
+            stdscr.nodelay(True)
+            nxt = stdscr.getch()
+            if nxt in (91, 79):  # '[' or 'O'
+                fin = stdscr.getch()
+                stdscr.nodelay(False)
+                if fin == 65:
+                    cursor -= 1
+                elif fin == 66:
+                    cursor += 1
+            else:
+                stdscr.nodelay(False)
+                if filt:
+                    filt = ""
+                else:
+                    return None
+        elif ch == 9:  # Tab
+            state["scope"] = "all" if scope == "here" else "here"
+            state["rows"], state["crashed"] = _gather_boxes(
+                cwd=os.getcwd() if state["scope"] == "here" else None)
+            cursor = 0
+        elif ch in (curses.KEY_ENTER, 10, 13):
+            return matches[cursor] if matches else None
+        elif ch in (curses.KEY_BACKSPACE, 127, 8):
+            filt = filt[:-1]
+        elif 32 <= ch < 127:
+            filt += chr(ch)
+            cursor = 0
+
+
+def cmd_picker():
+    """Full-screen box selection when we own a real terminal; the numbered
+    prompt flow otherwise (pipes, dumb terminals, scripts)."""
+    if not (sys.stdout.isatty() and sys.stdin.isatty()):
+        return cmd_rescue()
+    here = os.getcwd()
+    rows, crashed_sids = _gather_boxes(cwd=here)
+    scope = "here"
+    if not rows:
+        rows, crashed_sids = _gather_boxes()
+        scope = "all"
+        if not rows:
+            print("blackbox: no resumable sessions found anywhere.")
+            return
+    state = {"rows": rows, "crashed": crashed_sids, "cache": {}, "scope": scope}
+    import curses
+    sel = curses.wrapper(_picker_ui, state)
+    if sel is None:
+        return
+    mt, root, tp, sid = sel[0], sel[1], sel[2], sel[3]
+    crashed = {m["session_id"]: m for m in crashed_sessions()}
+    m = crashed.get(sid) or _session_record(root, tp, sid)
+    if m.get("unrecoverable"):
+        print("blackbox: that session never saved a conversation — nothing to resume."
+              + (f" Try: blackbox salvage {sid}" if m.get("salvageable") else ""))
+        return
+    if m.get("maybe_live"):
+        try:
+            sure = input("blackbox> evidence says this session may still be RUNNING. "
+                         "Resume anyway? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if sure != "y":
+            return
+    _exec_resume(m)
+
+
 def _print_picker(sessions, heading):
     now = time.time()
     print(heading)
@@ -1520,7 +1716,7 @@ def main():
     _drop_bin_path()
     args = sys.argv[1:]
     if not args:
-        print(__doc__)
+        cmd_picker()
         return
     cmd = args[0]
     if cmd == "hook":
@@ -1540,7 +1736,10 @@ def main():
     elif cmd == "list":
         cmd_list(as_json="--json" in args, show_all="--all" in args)
     elif cmd == "rescue":
-        cmd_rescue(target=args[1] if len(args) > 1 else None)
+        if len(args) > 1:
+            cmd_rescue(target=args[1])
+        else:
+            cmd_picker()
     elif cmd == "scan":
         fc = None
         if "--cwd" in args:

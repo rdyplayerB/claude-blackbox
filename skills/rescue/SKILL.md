@@ -43,17 +43,26 @@ recorder" or other black-box jargon. The tool's internals stay internal.
      cleanly-closed ones and ones from before blackbox was installed.
    Everything from other projects does not exist as far as this conversation
    is concerned — never list it, never summarize it, never offer it.
-4. **Offer the most recent one or two sessions**, newest first, each in this
-   shape and nothing more:
-   - One line naming what the session was doing (from the last exchange).
-   - One line: how it ended — "crashed" if it has a marker, "closed cleanly"
-     otherwise — and when.
-   - If flagged `maybe_live: true`: one warning line — evidence says it may
-     still be running; confirm its window is really gone first.
-   - If flagged `unrecoverable: true`: say plainly the conversation was never
-     saved and nothing can restore it; offer `"$BB" salvage <session-id>`
-     only if `salvageable` is true. Do not invent hope.
-   - Then the offer, in this order:
+4. **Present the boxes as a selection, not prose.** Use the question tool
+   (AskUserQuestion or equivalent selectable-options UI) with up to four of
+   the most recent sessions as options, newest first:
+   - option label: a 2-5 word gist of what the session was doing
+   - option description: how it ended ("crashed" / "closed cleanly"), how
+     long ago, plus the warnings below when they apply
+   - the built-in free-text option covers "none of these": treat the user's
+     typed text as a session-id prefix or a phrase to search `"$BB" scan
+     --cwd "$PWD"` output for.
+   When the user picks one, deliver step 4b for exactly that session. If the
+   selection UI is unavailable, fall back to a compact table (one line per
+   box: age, ended, gist, command) — never paragraphs.
+   Warnings that ride along wherever the session appears:
+   - `maybe_live: true`: evidence says it may still be running; confirm its
+     window is really gone first.
+   - `unrecoverable: true`: the conversation was never saved and nothing can
+     restore it; offer `"$BB" salvage <session-id>` only if `salvageable`
+     is true. Do not invent hope.
+4b. **Deliver the chosen box** in two or three lines — the offer, in this
+   order:
      * **If the session lives under THIS session's config root** (its
        `config_dir` equals `${CLAUDE_CONFIG_DIR:-~/.claude}`): the fastest
        path needs no new terminal — "To swap this pane to it: type
