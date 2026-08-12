@@ -973,6 +973,36 @@ def _exec_resume(m):
         print(f"  {m.get('resume', '')}")
 
 
+def _cwd_from_transcript(tp):
+    """Transcript records carry the session's real cwd."""
+    try:
+        with open(tp, errors="ignore") as fh:
+            for line in fh:
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                if d.get("cwd"):
+                    return d["cwd"]
+    except OSError:
+        pass
+    return HOME
+
+
+def _session_record(root, tp, sid):
+    """A resumable record for a transcript, marker or no marker."""
+    m = {"session_id": sid, "cwd": _cwd_from_transcript(tp),
+         "config_dir": root, "transcript_path": tp}
+    kind = _classify(tp)
+    if kind != "ok":
+        m["unrecoverable"] = True
+        if kind == "skeleton":
+            m["salvageable"] = True
+    else:
+        m["resume"] = _resume_cmd(m)
+    return m
+
+
 def _find_session_anywhere(prefix):
     """Resolve a session-id prefix to a resumable record: crashed markers
     first, then a sweep of every storage root — so cleanly-closed sessions
@@ -991,33 +1021,105 @@ def _find_session_anywhere(prefix):
                 continue
             for f in sorted(os.listdir(full)):
                 if f.endswith(".jsonl") and f.startswith(prefix):
-                    tp = os.path.join(full, f)
-                    sid = f[:-6]
-                    cwd = HOME
-                    try:
-                        # Transcript records carry the session's real cwd.
-                        with open(tp, errors="ignore") as fh:
-                            for line in fh:
-                                try:
-                                    d = json.loads(line)
-                                except Exception:
-                                    continue
-                                if d.get("cwd"):
-                                    cwd = d["cwd"]
-                                    break
-                    except OSError:
-                        pass
-                    m = {"session_id": sid, "cwd": cwd, "config_dir": root,
-                         "transcript_path": tp}
-                    kind = _classify(tp)
-                    if kind != "ok":
-                        m["unrecoverable"] = True
-                        if kind == "skeleton":
-                            m["salvageable"] = True
-                    else:
-                        m["resume"] = _resume_cmd(m)
-                    return m
+                    return _session_record(root, os.path.join(full, f), f[:-6])
     return None
+
+
+def _recent_sessions(cwd=None, limit=5):
+    """The flight-recorder view: the last N resumable sessions, newest first,
+    with no expiry — a rolling buffer of whatever happened, each entry aged.
+    Scoped to one project when cwd is given, machine-wide otherwise. Live
+    sessions are excluded (resuming a running session collides with it);
+    machinery is excluded; crashed sessions are included regardless of size,
+    everything else needs a substantive transcript."""
+    crashed = {m["session_id"]: m for m in crashed_sessions()
+               if not m.get("machinery")}
+    alive_sids = set()
+    if os.path.isdir(LIVE):
+        for f in os.listdir(LIVE):
+            if f.endswith(".json"):
+                try:
+                    mk = json.load(open(os.path.join(LIVE, f)))
+                    if _alive(mk.get("pid"), mk.get("started_at")):
+                        alive_sids.add(mk.get("session_id", ""))
+                except Exception:
+                    continue
+    want = _project_slug(os.path.abspath(cwd)) if cwd else None
+    rows = []
+    for root in _all_roots():
+        pdir = os.path.join(root, "projects")
+        if not os.path.isdir(pdir):
+            continue
+        for proj in os.listdir(pdir):
+            if want and proj != want:
+                continue
+            if "claude-mem-observer" in proj:
+                continue  # machinery farms
+            full = os.path.join(pdir, proj)
+            if not os.path.isdir(full):
+                continue
+            for f in os.listdir(full):
+                if not f.endswith(".jsonl"):
+                    continue
+                sid = f[:-6]
+                if sid in alive_sids:
+                    continue
+                tp = os.path.join(full, f)
+                try:
+                    st = os.stat(tp)
+                except OSError:
+                    continue
+                if st.st_size <= 50_000 and sid not in crashed:
+                    continue  # tiny and not a known crash: noise
+                rows.append((st.st_mtime, root, tp, sid))
+    rows.sort(reverse=True)
+    alive_pids = set()
+    if os.path.isdir(LIVE):
+        for f in os.listdir(LIVE):
+            if f.endswith(".json"):
+                try:
+                    mk = json.load(open(os.path.join(LIVE, f)))
+                    if mk.get("session_id") in alive_sids:
+                        alive_pids.add(int(mk.get("pid", 0)))
+                except Exception:
+                    continue
+    orphans = _claude_cwds_unaccounted(alive_pids) if rows else {}
+    out = []
+    for mt, root, tp, sid in rows[:limit]:
+        if sid in crashed:
+            m = dict(crashed[sid])
+            m["ended"] = "crashed"
+        else:
+            m = _session_record(root, tp, sid)
+            m["ended"] = "closed cleanly"
+            u, a = _preview(tp, tail_bytes=300_000)
+            m["last_user"], m["last_assistant"] = u, a
+            # A session with no marker can still be RUNNING (it started under
+            # an unhooked root). An unaccounted live claude in its directory,
+            # or a transcript written moments ago, is the tell.
+            if orphans.get(m.get("cwd", ""), 0) > 0 or time.time() - mt < 300:
+                m["maybe_live"] = True
+        m["age"] = time.time() - mt
+        out.append(m)
+    return out
+
+
+def _print_picker(sessions, heading):
+    now = time.time()
+    print(heading)
+    for i, m in enumerate(sessions, 1):
+        proj = m.get("cwd", "?").replace(HOME, "~")
+        flags = []
+        if m.get("unrecoverable"):
+            flags.append("✗ never saved")
+        if m.get("maybe_live"):
+            flags.append("⚠ may be running")
+        flag = ("  [" + ", ".join(flags) + "]") if flags else ""
+        print(f"[{i}] {_fmt_age(m.get('age', now)):>10}  {m.get('ended', '?'):14} "
+              f"{proj}{flag}")
+        gist = m.get("last_user") or m.get("last_assistant") or ""
+        if gist:
+            print(f"      {gist[:100]}")
 
 
 def cmd_rescue(target=None):
@@ -1033,18 +1135,41 @@ def cmd_rescue(target=None):
                      if m.get("salvageable") else ""))
             return
     else:
-        crashed = cmd_list()
-        if not any(not c.get("unrecoverable") for c in crashed):
-            return
-        try:
-            pick = input("\nblackbox> resume which? [number, or enter to quit] ").strip()
-        except (EOFError, KeyboardInterrupt):
-            return
-        if not pick.isdigit() or not (1 <= int(pick) <= len(crashed)):
-            return
-        m = crashed[int(pick) - 1]
+        # The flight-recorder picker: this project's last sessions first, the
+        # whole machine on request. No expiry — a rolling last-N, aged.
+        here = os.getcwd()
+        sessions = _recent_sessions(cwd=here)
+        showing_all = False
+        if sessions:
+            _print_picker(sessions,
+                          f"Recent sessions in {here.replace(HOME, '~')}:")
+        else:
+            sessions = _recent_sessions(limit=10)
+            showing_all = True
+            if not sessions:
+                print("blackbox: no resumable sessions found anywhere.")
+                return
+            _print_picker(sessions, "No sessions for this directory. "
+                          "Recent sessions everywhere:")
+        while True:
+            prompt = ("\nblackbox> resume which? [number"
+                      + ("" if showing_all else ", a = all projects")
+                      + ", enter = quit] ")
+            try:
+                pick = input(prompt).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                return
+            if pick == "a" and not showing_all:
+                sessions = _recent_sessions(limit=10)
+                showing_all = True
+                _print_picker(sessions, "Recent sessions everywhere:")
+                continue
+            if not pick.isdigit() or not (1 <= int(pick) <= len(sessions)):
+                return
+            m = sessions[int(pick) - 1]
+            break
         if m.get("unrecoverable"):
-            print("blackbox: that session is unrecoverable — the conversation was never saved."
+            print("blackbox: that session never saved a conversation — nothing to resume."
                   + (f" Try: blackbox salvage {m['session_id']}"
                      if m.get("salvageable") else ""))
             return

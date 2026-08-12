@@ -50,14 +50,20 @@ sessions from other projects, never pad with caveats they didn't ask about.
    - If flagged `unrecoverable: true`: say plainly the conversation was never
      saved and nothing can restore it; offer `"$BB" salvage <session-id>`
      only if `salvageable` is true. Do not invent hope.
-   - Then: "Want it back? Run this in a separate plain terminal:" followed by
-     ONE short command in a code block:
-     `blackbox rescue <session-id>` if `command -v blackbox` succeeds,
-     otherwise `"$BB" rescue <session-id>`. rescue-by-id handles the project
-     directory, the config profile, and the exec itself — never show the
-     long cd/CLAUDE_CONFIG_DIR/claude form, and never run it yourself or
-     suggest the `!` prefix (`claude --resume` is interactive and replaces
-     its process).
+   - Then the offer, in this order:
+     * **If the session lives under THIS session's config root** (its
+       `config_dir` equals `${CLAUDE_CONFIG_DIR:-~/.claude}`): the fastest
+       path needs no new terminal — "To swap this pane to it: type
+       `/resume` and pick the session titled 「its title」 (Ctrl+A widens the
+       picker; note this pane's current conversation stays saved)." The
+       built-in /resume takes names and a picker, not raw ids.
+     * Always also give the terminal form as one short command in a code
+       block: `blackbox rescue <session-id>` if `command -v blackbox`
+       succeeds, otherwise `"$BB" rescue <session-id>`. rescue-by-id handles
+       the project directory, the config profile, and the exec itself —
+       never show the long cd/CLAUDE_CONFIG_DIR/claude form, and never run
+       it yourself or suggest the `!` prefix (`claude --resume` is
+       interactive and replaces its process).
    Skip non-candidates silently: the newest tiny transcripts are usually
    this very conversation and the pane the user just restarted — never
    offer those.

@@ -147,7 +147,8 @@ it. `blackbox doctor` reports any profile that is active but unwired.
 After a crash / force-quit / app death:
 
 ```
-blackbox rescue          # in a terminal: pick a session, it becomes that session
+blackbox rescue          # picker: this project's last 5 sessions (crashed or
+                         # closed), aged, newest first; `a` widens to all projects
 blackbox rescue <id>     # one command, any session: crashed or cleanly closed,
                          # any profile; handles cd + CLAUDE_CONFIG_DIR + exec
 /rescue                  # inside any Claude session: this project's sessions + commands
