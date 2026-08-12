@@ -67,6 +67,18 @@ def _flock_bounded(fcntl, f, op, tries=20, delay=0.05):
     return False
 
 
+def _manifest_version():
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.realpath(sys.argv[0])))
+        return json.load(open(os.path.join(
+            root, ".claude-plugin", "plugin.json"))).get("version", "?")
+    except Exception:
+        return "?"
+
+
+_CACHED_VERSION = _manifest_version()
+
+
 def _log(event, **kw):
     """Append one JSONL line, safely under concurrency. Several sessions log
     at once; a naive read-tail-rewrite truncation clobbers concurrent appends
@@ -80,6 +92,11 @@ def _log(event, **kw):
         os.makedirs(STATE, exist_ok=True)
         kw["ts"] = round(time.time(), 3)
         kw["event"] = event
+        # Which binary wrote this line. After an update, panes keep running
+        # their old plugin version until restarted, and without this stamp
+        # the log cannot say which version served which hook (needed live:
+        # new registers appeared and the fleet mix was unknowable).
+        kw["v"] = _CACHED_VERSION
         line = json.dumps(kw) + "\n"
         for _ in range(3):
             with open(LOG, "a") as f:
@@ -1249,11 +1266,24 @@ def _find_session_anywhere(prefix, max_matches=7):
                 if not f.endswith(".jsonl") or not f.startswith(prefix):
                     continue
                 sid = f[:-6]
+                tp = os.path.join(full, f)
                 if sid in found:
+                    # The same sid can exist under several roots (a project
+                    # worked on across CLAUDE_CONFIG_DIR profiles). They are
+                    # one session; resume must target the root with the
+                    # freshest copy, not whichever root scanned last (drilled:
+                    # the pick used to be scan-order arbitrary).
+                    prev_tp = found[sid].get("transcript_path", "")
+                    try:
+                        if os.path.getmtime(tp) <= os.path.getmtime(prev_tp):
+                            continue
+                    except OSError:
+                        continue
+                    found[sid] = _session_record(root, tp, sid)
                     continue
                 if len(found) > max_matches:
                     return list(found.values()), True
-                found[sid] = _session_record(root, os.path.join(full, f), sid)
+                found[sid] = _session_record(root, tp, sid)
     for sid, m in found.items():
         if sid in alive:
             m["alive"] = True
@@ -1701,12 +1731,7 @@ def _version():
     copies of blackbox can coexist (clone, per-root plugin caches, old cache
     versions) and an hour was once lost to not knowing which one was
     answering — so doctor states it up front."""
-    try:
-        root = os.path.dirname(os.path.dirname(os.path.realpath(sys.argv[0])))
-        return json.load(open(os.path.join(
-            root, ".claude-plugin", "plugin.json"))).get("version", "?")
-    except Exception:
-        return "?"
+    return _CACHED_VERSION
 
 
 def cmd_doctor(as_json=False):
@@ -1723,6 +1748,11 @@ def cmd_doctor(as_json=False):
         ev = e.get("event") if isinstance(e.get("event"), str) else "?"
         counts[ev] = counts.get(ev, 0) + 1
     errors = [e for e in recent if e.get("ok") is False]
+    vmix = {}
+    for e in recent:
+        if isinstance(e.get("event"), str) and e["event"].startswith("hook."):
+            vv = e.get("v") if isinstance(e.get("v"), str) else "pre-1.3.16"
+            vmix[vv] = vmix.get(vv, 0) + 1
     slow = [e for e in recent if _num(e.get("ms")) > 2000]
 
     # Coverage: transcripts that changed in the last 24h whose session id never
@@ -1809,6 +1839,7 @@ def cmd_doctor(as_json=False):
         "unwired_roots": unwired,
         "double_wired_roots": doubled,
         "hooks_fired_24h": counts,
+        "hook_versions_24h": vmix,
         "hook_errors_24h": len(errors),
         "last_error": (errors[-1] if errors else None),
         "slow_hooks_over_2s": len(slow),
@@ -1845,6 +1876,11 @@ def cmd_doctor(as_json=False):
         print(f"    (removes the manual hooks; the plugin install stays)")
     hooks_24h = sum(v for k, v in counts.items() if k.startswith("hook."))
     print(f"  hooks fired (24h): {hooks_24h}  {dict(sorted(counts.items()))}")
+    if len(vmix) > 1:
+        print(f"  ! hooks served by MIXED binary versions (stale panes): "
+              f"{dict(sorted(vmix.items()))} — restart panes to converge")
+    elif vmix:
+        print(f"  hook binary version (24h): {next(iter(vmix))}")
     if errors:
         last = errors[-1]
         print(f"  ✗ {len(errors)} failed operation(s) — most recent: "
