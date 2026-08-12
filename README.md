@@ -147,11 +147,13 @@ it. `blackbox doctor` reports any profile that is active but unwired.
 After a crash / force-quit / app death:
 
 ```
-blackbox rescue     # in a terminal: pick a session, it becomes that session
-/rescue             # inside any Claude session: list + copy-paste commands
-blackbox list       # just show what's rescuable
-blackbox scan       # no markers needed: sweep all storage roots (pre-install crashes)
-blackbox salvage <session-id>   # last resort for sessions that never saved
+blackbox rescue          # in a terminal: pick a session, it becomes that session
+blackbox rescue <id>     # one command, any session: crashed or cleanly closed,
+                         # any profile; handles cd + CLAUDE_CONFIG_DIR + exec
+/rescue                  # inside any Claude session: this project's sessions + commands
+blackbox list            # just show what's rescuable
+blackbox scan [--cwd d]  # no markers needed: sweep storage roots (pre-install crashes)
+blackbox salvage <id>    # last resort for sessions that never saved
 ```
 
 **What salvage does:** a session running with transcript saving disabled still

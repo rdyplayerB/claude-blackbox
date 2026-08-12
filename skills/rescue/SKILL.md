@@ -29,41 +29,46 @@ sessions from other projects, never pad with caveats they didn't ask about.
    those sessions are running RIGHT NOW without saving anything — every word
    in them is lost if they die. Tell the user immediately and plainly; that
    loss is still preventable.
-3. **Filter `crashed` to THIS project**: keep only entries whose `cwd`
-   matches the current working directory. Everything else does not exist as
-   far as this conversation is concerned — do not list it, do not summarize
-   it, do not offer it.
-4. **If this project has crashed session(s)**, present each in this shape
-   and nothing more:
+3. **Gather THIS project's sessions, however they ended.** Users reach for
+   /rescue to get their last session back; they do not care whether it
+   crashed or closed cleanly (closing a terminal window IS a clean exit and
+   leaves no crash marker). So collect BOTH:
+   - crashed entries from step 1 whose `cwd` matches the current working
+     directory, and
+   - `"$BB" scan --cwd "$PWD"` (run it now; no need to ask), which lists
+     every saved session for this project by recency, including
+     cleanly-closed ones and ones from before blackbox was installed.
+   Everything from other projects does not exist as far as this conversation
+   is concerned — never list it, never summarize it, never offer it.
+4. **Offer the most recent one or two sessions**, newest first, each in this
+   shape and nothing more:
    - One line naming what the session was doing (from the last exchange).
-   - One line: when it died, branch if known.
+   - One line: how it ended — "crashed" if it has a marker, "closed cleanly"
+     otherwise — and when.
    - If flagged `maybe_live: true`: one warning line — evidence says it may
-     still be running (fresh writes or an unaccounted live claude here);
-     confirm its window is really gone first.
+     still be running; confirm its window is really gone first.
    - If flagged `unrecoverable: true`: say plainly the conversation was never
      saved and nothing can restore it; offer `"$BB" salvage <session-id>`
      only if `salvageable` is true. Do not invent hope.
    - Then: "Want it back? Run this in a separate plain terminal:" followed by
-     the `resume` command in a code block. Never run it yourself and never
-     suggest the `!` prefix — `claude --resume` is interactive and replaces
-     its process.
-5. **If this project has NO crashed session**, do not present other
-   projects' sessions. Run `"$BB" scan --cwd "$PWD"` immediately (no need to
-   ask) — it sweeps every storage root for THIS project's saved sessions,
-   including ones from before blackbox was installed. Present any plausible
-   match the same way as step 4 (scan output includes the resume command).
-   Scan shows every saved session for the project, so choose with care: the
-   newest tiny entries are usually this very conversation and the pane the
-   user just restarted — never offer those. The lost session is typically
-   the most recent SUBSTANTIVE one whose preview matches what the user was
-   doing; if several are plausible, show the top one or two, newest first.
-6. **If scan finds nothing either**, say exactly that in two lines: no saved
-   session for this project was found in any known storage root, and the
-   next diagnostic step is `"$BB" doctor --json` (reports unwired config
-   roots, hook errors, and sessions that changed on disk without blackbox
-   seeing them). If other projects do have crashed sessions, one closing
-   pointer is allowed — "N crashed sessions exist in other projects; run
-   /rescue there or `blackbox list` to see them" — with no details.
+     ONE short command in a code block:
+     `blackbox rescue <session-id>` if `command -v blackbox` succeeds,
+     otherwise `"$BB" rescue <session-id>`. rescue-by-id handles the project
+     directory, the config profile, and the exec itself — never show the
+     long cd/CLAUDE_CONFIG_DIR/claude form, and never run it yourself or
+     suggest the `!` prefix (`claude --resume` is interactive and replaces
+     its process).
+   Skip non-candidates silently: the newest tiny transcripts are usually
+   this very conversation and the pane the user just restarted — never
+   offer those.
+5. **If neither source has any session for this project**, say exactly that
+   in two lines: no saved session for this project was found in any known
+   storage root, and the next diagnostic step is `"$BB" doctor --json`
+   (reports unwired config roots, hook errors, and sessions that changed on
+   disk without blackbox seeing them). If other projects do have crashed
+   sessions, one closing pointer is allowed — "N crashed sessions exist in
+   other projects; run /rescue there or `blackbox list` to see them" — with
+   no details.
 
 ## Rules
 

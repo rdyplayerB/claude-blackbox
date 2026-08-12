@@ -920,31 +920,10 @@ def cmd_list(as_json=False, show_all=False):
     return crashed
 
 
-def cmd_rescue():
-    crashed = cmd_list()
-    if not any(not m.get("unrecoverable") for m in crashed):
-        return
-    try:
-        pick = input("\nblackbox> resume which? [number, or enter to quit] ").strip()
-    except (EOFError, KeyboardInterrupt):
-        return
-    if not pick.isdigit() or not (1 <= int(pick) <= len(crashed)):
-        return
-    m = crashed[int(pick) - 1]
+def _exec_resume(m):
+    """Become the resumed session: consume any marker (reversibly), set the
+    right config root, cd to the project, exec claude."""
     sid = m["session_id"]
-    if m.get("unrecoverable"):
-        print("blackbox: that session is unrecoverable — the conversation was never saved."
-              + (f" Try: blackbox salvage {sid}" if m.get("salvageable") else ""))
-        return
-    if m.get("maybe_live"):
-        try:
-            sure = input("blackbox> evidence says this session may still be RUNNING "
-                         "(fresh writes or an unaccounted live claude in its directory). "
-                         "Resume anyway? [y/N] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            return
-        if sure != "y":
-            return
     # The exec below replaces this process, so this line is the only record of
     # exactly what was launched.
     _log("rescue", sid=sid[:8], cwd=m.get("cwd", ""),
@@ -956,10 +935,12 @@ def cmd_rescue():
     # a fresh marker and the .rescued file is swept by the next hook start.
     mp = os.path.join(LIVE, sid + ".json")
     consumed = mp + ".rescued"
-    try:
-        os.replace(mp, consumed)
-    except OSError:
-        _log("rescue.consume", sid=sid[:8], ok=False)
+    had_marker = os.path.exists(mp)
+    if had_marker:
+        try:
+            os.replace(mp, consumed)
+        except OSError:
+            _log("rescue.consume", sid=sid[:8], ok=False)
     env = dict(os.environ)
     cd = m.get("config_dir", "")
     # Set the session's root EXPLICITLY, even when it is the default: this
@@ -982,13 +963,103 @@ def cmd_rescue():
     try:
         os.execvpe("claude", ["claude", "--resume", sid], env)
     except OSError:
-        try:
-            os.replace(consumed, mp)  # restore the crash record
-        except OSError:
-            pass
+        if had_marker:
+            try:
+                os.replace(consumed, mp)  # restore the crash record
+            except OSError:
+                pass
         _log("rescue.exec", sid=sid[:8], ok=False)
         print("blackbox: could not exec `claude` (not on PATH?). Run this by hand:")
         print(f"  {m.get('resume', '')}")
+
+
+def _find_session_anywhere(prefix):
+    """Resolve a session-id prefix to a resumable record: crashed markers
+    first, then a sweep of every storage root — so cleanly-closed sessions
+    (which leave no marker: closing a window IS a clean exit) are just as
+    rescuable by id as crashed ones."""
+    for m in crashed_sessions():
+        if m["session_id"].startswith(prefix):
+            return m
+    for root in _all_roots():
+        pdir = os.path.join(root, "projects")
+        if not os.path.isdir(pdir):
+            continue
+        for proj in sorted(os.listdir(pdir)):
+            full = os.path.join(pdir, proj)
+            if not os.path.isdir(full):
+                continue
+            for f in sorted(os.listdir(full)):
+                if f.endswith(".jsonl") and f.startswith(prefix):
+                    tp = os.path.join(full, f)
+                    sid = f[:-6]
+                    cwd = HOME
+                    try:
+                        # Transcript records carry the session's real cwd.
+                        with open(tp, errors="ignore") as fh:
+                            for line in fh:
+                                try:
+                                    d = json.loads(line)
+                                except Exception:
+                                    continue
+                                if d.get("cwd"):
+                                    cwd = d["cwd"]
+                                    break
+                    except OSError:
+                        pass
+                    m = {"session_id": sid, "cwd": cwd, "config_dir": root,
+                         "transcript_path": tp}
+                    kind = _classify(tp)
+                    if kind != "ok":
+                        m["unrecoverable"] = True
+                        if kind == "skeleton":
+                            m["salvageable"] = True
+                    else:
+                        m["resume"] = _resume_cmd(m)
+                    return m
+    return None
+
+
+def cmd_rescue(target=None):
+    if target:
+        m = _find_session_anywhere(target)
+        if m is None:
+            print(f"blackbox: no session matching {target!r} in markers or any "
+                  "storage root. `blackbox scan --cwd <project>` lists what exists.")
+            return
+        if m.get("unrecoverable"):
+            print("blackbox: that session never saved a conversation — nothing to resume."
+                  + (f" Try: blackbox salvage {m['session_id']}"
+                     if m.get("salvageable") else ""))
+            return
+    else:
+        crashed = cmd_list()
+        if not any(not c.get("unrecoverable") for c in crashed):
+            return
+        try:
+            pick = input("\nblackbox> resume which? [number, or enter to quit] ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if not pick.isdigit() or not (1 <= int(pick) <= len(crashed)):
+            return
+        m = crashed[int(pick) - 1]
+        if m.get("unrecoverable"):
+            print("blackbox: that session is unrecoverable — the conversation was never saved."
+                  + (f" Try: blackbox salvage {m['session_id']}"
+                     if m.get("salvageable") else ""))
+            return
+    if m.get("maybe_live"):
+        try:
+            sure = input("blackbox> evidence says this session may still be RUNNING "
+                         "(fresh writes or an unaccounted live claude in its directory). "
+                         "Resume anyway? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if sure != "y":
+            return
+    _exec_resume(m)
+    return
+
 
 
 def _project_slug(cwd):
@@ -1219,6 +1290,22 @@ def _drop_bin_path():
         os.makedirs(STATE, exist_ok=True)
         with open(os.path.join(STATE, "bin-path"), "w") as f:
             f.write(os.path.realpath(os.path.abspath(sys.argv[0])))
+        # Opportunistic PATH shim: if ~/.local/bin exists, keep a symlink
+        # there so recovery is typed as `blackbox rescue <id>` instead of a
+        # full path — profile gymnastics are this tool's job, not the user's.
+        lb = os.path.join(HOME, ".local", "bin")
+        if os.path.isdir(lb):
+            link = os.path.join(lb, "blackbox")
+            target = os.path.realpath(os.path.abspath(sys.argv[0]))
+            try:
+                if os.path.islink(link):
+                    if os.path.realpath(link) != target:
+                        os.unlink(link)
+                        os.symlink(target, link)
+                elif not os.path.exists(link):
+                    os.symlink(target, link)
+            except OSError:
+                pass
     except Exception:
         pass
 
@@ -1247,7 +1334,7 @@ def main():
     elif cmd == "list":
         cmd_list(as_json="--json" in args, show_all="--all" in args)
     elif cmd == "rescue":
-        cmd_rescue()
+        cmd_rescue(target=args[1] if len(args) > 1 else None)
     elif cmd == "scan":
         fc = None
         if "--cwd" in args:
