@@ -225,28 +225,32 @@ length, and it drives it identically in sessions that never crash.
 
 The built-in resume is the engine, and `rescue` finishes by execing
 `claude --resume <session-id>`. The restored session is exactly what Claude
-Code itself restores, at the same cost. blackbox's work is everything that has
-to happen before that command can be typed:
+Code itself restores, at the same cost, from the same transcript file.
+blackbox's work is everything before that command can be typed. The
+difference is finding, not restoring:
 
-- **Knowing a session died.** Claude Code marks nothing when a session
-  crashes; a kill looks the same on disk as a clean exit. The markers are what
-  turn "which of these hundred transcripts was mid-task?" into a list.
-- **Finding it anywhere.** `claude --resume` and the `/resume` picker search
-  the current config root. A session that ran under another
-  `CLAUDE_CONFIG_DIR` profile is invisible there, which is how two of the four
-  sessions in the origin story stayed lost while sitting on disk. blackbox
-  sweeps every root it has ever seen and carries the right environment into
-  the resume command.
-- **The starting conditions.** Resuming from the wrong directory or profile
-  gives the session the wrong world. `rescue <id>` handles the cd, the config
-  dir, and the exec in one step.
-- **The unrecoverable case.** Resume can only replay what was saved. blackbox
-  watches saving itself, warns inside the session while the loss is still
-  preventable, and salvages an outline when the warning came too late.
+| | built-in `/resume` | blackbox |
+|---|---|---|
+| Restore a saved conversation | ✓ | ✓ (by execing the same resume) |
+| Tell you a session crashed at all | no; a crash looks like a clean exit | ✓ dead-pid marker per session |
+| Sessions in the current project and profile | ✓ picker | ✓ picker |
+| Sessions in other project folders | hidden by default (Ctrl+A widens) | ✓ Tab scope in the picker |
+| Sessions under another `CLAUDE_CONFIG_DIR` profile | invisible | ✓ sweeps every root ever seen |
+| Set cwd and profile for the resumed session | you arrange both by hand | ✓ `rescue <id>` does cd + config dir + exec |
+| Warn a live session that it is not saving | no | ✓ start-of-session guard |
+| When nothing was ever saved | nothing to offer | outline recovery via `salvage` |
 
-If none of those four gaps applies (same profile, same directory, session
-closed cleanly, and you know which one you want), the built-in resume alone
-serves fine. The gaps are just never announced when they do apply.
+The rows that matter most are the two in the middle. Resume searches exactly
+one config root (the current one) and its picker starts scoped to the current
+folder, so on a machine with profiles, "resume shows nothing" usually means
+"the session lives in a root resume never looked in", while the transcript
+sits on disk the whole time. That is precisely how two of the four sessions
+in the origin story stayed lost. And since a crash announces nothing, you can
+be missing a session without knowing there is one to look for.
+
+If none of the gaps applies (same profile, same folder, clean close, and you
+know which session you want), the built-in resume alone serves fine. The gaps
+are just never announced when they do apply.
 
 ## Knowing it's working
 
