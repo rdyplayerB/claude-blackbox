@@ -204,6 +204,50 @@ compaction never touches the transcript on disk, and the summary Claude Code
 builds is drawn from that intact file. The better the transcript survives, the
 better the summary, which is one more quiet reason the recorder guards it.
 
+### What a rescue costs
+
+blackbox itself spends nothing. Finding, listing, and resuming are file reads
+by a Python script; no model is in the loop until the resumed session takes
+its first turn.
+
+That first turn pays for one prompt-cache rebuild, and it helps to know that
+long sessions pay for those routinely anyway. A model call has no memory, so
+Claude Code re-sends the whole conversation on every turn; the prompt cache is
+what makes those re-sends cheap, and it expires after enough idle time. Every
+long break already triggers the same full-price rebuild a rescue does. On the
+day-long 10 MB session this tool was built in, the rescue's rebuild was the
+sixth of the day and not the largest, because five ordinary coffee-break gaps
+had each cost the same with no crash anywhere. After that one turn, pricing
+returns to the normal cached rate. What actually drives cost is conversation
+length, and it drives it identically in sessions that never crash.
+
+## blackbox and the built-in resume
+
+The built-in resume is the engine, and `rescue` finishes by execing
+`claude --resume <session-id>`. The restored session is exactly what Claude
+Code itself restores, at the same cost. blackbox's work is everything that has
+to happen before that command can be typed:
+
+- **Knowing a session died.** Claude Code marks nothing when a session
+  crashes; a kill looks the same on disk as a clean exit. The markers are what
+  turn "which of these hundred transcripts was mid-task?" into a list.
+- **Finding it anywhere.** `claude --resume` and the `/resume` picker search
+  the current config root. A session that ran under another
+  `CLAUDE_CONFIG_DIR` profile is invisible there, which is how two of the four
+  sessions in the origin story stayed lost while sitting on disk. blackbox
+  sweeps every root it has ever seen and carries the right environment into
+  the resume command.
+- **The starting conditions.** Resuming from the wrong directory or profile
+  gives the session the wrong world. `rescue <id>` handles the cd, the config
+  dir, and the exec in one step.
+- **The unrecoverable case.** Resume can only replay what was saved. blackbox
+  watches saving itself, warns inside the session while the loss is still
+  preventable, and salvages an outline when the warning came too late.
+
+If none of those four gaps applies (same profile, same directory, session
+closed cleanly, and you know which one you want), the built-in resume alone
+serves fine. The gaps are just never announced when they do apply.
+
 ## Knowing it's working
 
 You should be able to confirm blackbox is recording before you need it to have
