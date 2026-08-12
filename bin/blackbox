@@ -835,7 +835,7 @@ def crashed_sessions():
         # process). Flag rather than hide — hiding would delay a real rescue,
         # but resuming a live session collides with it.
         try:
-            if time.time() - os.path.getmtime(tp) < 300:
+            if time.time() - _last_activity(tp) < 300:
                 mark["maybe_live"] = True
         except OSError:
             pass
@@ -973,6 +973,37 @@ def _exec_resume(m):
         print(f"  {m.get('resume', '')}")
 
 
+def _last_activity(tp):
+    """When the CONVERSATION last moved, not when the file did. Claude Code
+    appends metadata stubs (last-prompt, ai-title, system records) to
+    transcripts of closed sessions, so mtime routinely lies — measured 4% of
+    recent transcripts with mtime 10+ minutes fresher than their last real
+    exchange, one by 7.75 hours. Reads the tail; falls back to mtime."""
+    import datetime
+    try:
+        size = os.path.getsize(tp)
+        with open(tp, "rb") as f:
+            f.seek(max(0, size - 200_000))
+            data = f.read().decode("utf-8", "ignore")
+        best = None
+        for line in data.split("\n"):
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if d.get("type") in ("user", "assistant") and d.get("timestamp"):
+                best = d["timestamp"]
+        if best:
+            return datetime.datetime.fromisoformat(
+                best.replace("Z", "+00:00")).timestamp()
+        return os.path.getmtime(tp)
+    except Exception:
+        try:
+            return os.path.getmtime(tp)
+        except OSError:
+            return 0
+
+
 def _cwd_from_transcript(tp):
     """Transcript records carry the session's real cwd."""
     try:
@@ -1097,8 +1128,10 @@ def _recent_sessions(cwd=None, limit=5):
             # A session with no marker can still be RUNNING (it started under
             # an unhooked root). An unaccounted live claude in its directory,
             # or a transcript written moments ago, is the tell.
-            if orphans.get(m.get("cwd", ""), 0) > 0 or time.time() - mt < 300:
+            act = _last_activity(tp)
+            if orphans.get(m.get("cwd", ""), 0) > 0 or time.time() - act < 300:
                 m["maybe_live"] = True
+            mt = act or mt
         m["age"] = time.time() - mt
         out.append(m)
     return out
