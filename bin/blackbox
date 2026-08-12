@@ -474,14 +474,28 @@ def _classify(transcript_path):
     """
     if not transcript_path or not os.path.exists(transcript_path):
         return "missing"
+    # Bounded reads only. The old front-to-back line scan was O(file) in the
+    # worst case and once pulled a 1GB "line" into memory inside a hook; and
+    # whether a session is SAVING is a question about the newest records, so
+    # the tail is checked first anyway. Head is kept as a fallback for files
+    # whose tail is mid-write garbage. Spacing-tolerant: a transcript is not
+    # guaranteed compact JSON.
+    msg = re.compile(r'"type"\s*:\s*"(?:user|assistant)"')
+    meta = re.compile(r'"type"\s*:\s*"(?:last-prompt|ai-title)"')
     meta_only = False
     try:
-        with open(transcript_path, errors="ignore") as f:
-            for line in f:
-                if '"type":"user"' in line or '"type":"assistant"' in line:
-                    return "ok"
-                if '"type":"last-prompt"' in line or '"type":"ai-title"' in line:
-                    meta_only = True
+        size = os.path.getsize(transcript_path)
+        with open(transcript_path, "rb") as f:
+            chunks = [f.read(65536)]
+            if size > 65536:
+                f.seek(max(0, size - 262144))
+                chunks.append(f.read(262144))
+        for c in chunks:
+            text = c.decode("utf-8", "ignore")
+            if msg.search(text):
+                return "ok"
+            if meta.search(text):
+                meta_only = True
     except Exception:
         pass
     # A file with neither messages nor metadata has nothing to offer either way.
