@@ -144,11 +144,32 @@ it. `blackbox doctor` reports any profile that is active but unwired.
 
 ## Use
 
-After a crash / force-quit / app death:
+After a crash / force-quit / app death, run `blackbox` with no arguments to get
+the Black Box Picker:
+
+```text
+▄▄▄ BLACK BOXES ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ filter: _                                               [Tab: this project]
+▸  T-45m  crashed reel           add a scrubber to the studio preview player
+    T-2h  closed  waterreminder  wire the streak counter to HealthKit
+    T-8h  closed  notchpeek      menu bar icon flickers on external displays
+    T-1d  crashed zork1          map the maze rooms east of the white house
+    T-2d  closed  mochilabs      draft the pricing page copy
+    T-9d  closed  blogogi        audit the RSS feed template
+ 6 of 6 boxes · Enter resume · Esc clear/quit · Tab scope
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+```
+
+One line per session: T-minus age, how it ended, project, and what it was
+doing when it stopped. Arrows move, Enter resumes in place, Tab switches
+between this project and everything. Typing filters, and filtering replaces
+scrolling, which is what keeps years of history navigable in ten rows.
+Crashed and cleanly-closed sessions sit in the same list because closing a
+terminal window is a clean exit, and either way you want the session back.
+
+The rest of the surface:
 
 ```
-blackbox                 # the Black Box Picker: full-screen, type to filter,
-                         # arrows + Enter to resume; Tab widens to all projects
 blackbox rescue          # same picker (numbered list when not a real terminal)
 blackbox rescue <id>     # one command, any session: crashed or cleanly closed,
                          # any profile; handles cd + CLAUDE_CONFIG_DIR + exec
@@ -166,6 +187,22 @@ than the conversation, so if you are relying on it, the guard has already
 failed. It exists because it works *retroactively*: the guard can only protect
 sessions started after install, but salvage can still pull the outline out of
 losses that predate blackbox entirely.
+
+## What a rescue restores
+
+Everything Claude Code saved: the full conversation, with all its context,
+exactly as the transcript on disk recorded it. The resumed session picks up
+where the dead one stopped.
+
+One thing sits outside any tool's reach: the model's context window. A
+conversation long enough to need compaction (Claude Code summarizing older
+turns to make room) will still need it after a rescue, at the same point it
+would have needed it with no crash at all. So a freshly rescued marathon
+session may compact soon after coming back. That is the conversation's length,
+not the rescue, and nothing is lost that a crash-free session would have kept:
+compaction never touches the transcript on disk, and the summary Claude Code
+builds is drawn from that intact file. The better the transcript survives, the
+better the summary, which is one more quiet reason the recorder guards it.
 
 ## Knowing it's working
 
@@ -198,6 +235,9 @@ Doctor answers four questions the log alone can't:
 
 - Resurrect sessions that never saved a transcript. It can only warn you while
   the session is still running and the loss is still preventable.
+- Grow the model's context window. A conversation that was long enough to
+  compact before the crash resumes just as long, and compacts on the same
+  schedule it always would have (see "What a rescue restores").
 - Restart background processes the crash killed. The resumed agent re-runs
   them. File edits already on disk survive regardless.
 - Watch anything other than Claude Code (v1 scope decision).
