@@ -116,10 +116,12 @@ like any other plugin.
 Backs up `~/.claude/settings.json`, merges three hooks (validated, restored on
 failure), links the `/rescue` skill. `uninstall.sh` reverses it.
 
-**Pick one, not both.** Installing both ways runs every hook twice. Either is
-fine; the CLI records its own location (`~/.blackbox/bin-path`) on every run,
-so the skill and hooks find it regardless of which path you chose or where the
-clone lives.
+**Pick one, not both.** Installing both ways runs every hook twice, so
+`install.sh` refuses a root that already has the plugin enabled (and
+`blackbox doctor` flags a double-wired root if one exists anyway). Either
+way is fine; the CLI records its own location (`~/.blackbox/bin-path`) on
+every run, so the skill and hooks find it regardless of which path you
+chose or where the clone lives.
 
 New sessions are protected immediately either way. Whether an
 already-running session picks the hooks up varies by Claude Code version

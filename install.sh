@@ -31,6 +31,27 @@ if [ ! -f "$SETTINGS" ]; then
   echo "created empty $SETTINGS"
 fi
 
+# Refuse to create the double-wiring the README warns about: a root already
+# wired through the plugin system would run every hook twice with manual
+# hooks added on top (doctor diagnoses that after the fact; better to not
+# create it). Checked before the backup so a refusal leaves zero residue.
+if python3 - "$SETTINGS" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8-sig"))
+except Exception:
+    sys.exit(1)  # unreadable settings: let the main block report it properly
+sys.exit(0 if any(k.split("@")[0] == "blackbox"
+                  for k in d.get("enabledPlugins", {})) else 1)
+PY
+then
+  echo "This root already has blackbox enabled as a plugin — installing the"
+  echo "manual hooks on top would run every hook twice. Nothing was changed."
+  echo "  to update instead:      claude plugin update blackbox@rdyplayerB"
+  echo "  to switch to manual:    ./uninstall.sh $ROOT   (then re-run this)"
+  exit 1
+fi
+
 BAK="$SETTINGS.bak-blackbox-$TS"
 cp "$SETTINGS" "$BAK"
 echo "backed up settings.json -> $BAK"
