@@ -150,12 +150,12 @@ the Black Box Picker:
 ```text
 ▄▄▄ BLACK BOXES ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  filter: _                                               [Tab: this project]
-▸  T-45m  crashed reel           add a scrubber to the studio preview player
-    T-2h  closed  waterreminder  wire the streak counter to HealthKit
-    T-8h  closed  notchpeek      menu bar icon flickers on external displays
-    T-1d  crashed zork1          map the maze rooms east of the white house
-    T-2d  closed  mochilabs      draft the pricing page copy
-    T-9d  closed  blogogi        audit the RSS feed template
+▸  T-45m  crashed parkfinder     add a radius slider to the map search
+    T-2h  closed  brewlog        chart caffeine per day from the entries
+    T-8h  closed  synthkeys      fix stuck notes when two keys land together
+    T-1d  crashed dungeonrun     balance loot drops in the crypt level
+    T-2d  closed  invoicely      draft the overdue reminder email
+    T-9d  closed  gardenio       water schedule pushes at the wrong hour
  6 of 6 boxes · Enter resume · Esc clear/quit · Tab scope
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ```
