@@ -1251,7 +1251,15 @@ def _picker_ui(stdscr, state):
         rows, crashed_sids, cache, scope = (state["rows"], state["crashed"],
                                             state["cache"], state["scope"])
         h, w = stdscr.getmaxyx()
-        vis_cap = max(3, h - 5)
+        vis_cap = max(1, h - 5)
+
+        def put(y, x, text, attr=0):
+            # Never crash on geometry: a 3-line terminal is a valid terminal.
+            if 0 <= y < h and x < w - 1:
+                try:
+                    stdscr.addnstr(y, x, text, w - 1 - x, attr)
+                except curses.error:
+                    pass
         if filt:
             f = filt.lower()
             matches = []
@@ -1277,21 +1285,21 @@ def _picker_ui(stdscr, state):
         top = max(0, cursor - vis_cap + 1)
         stdscr.erase()
         title = " BLACK BOXES "
-        stdscr.addnstr(0, 0, ("▄▄▄" + title + "▄" * w)[:w - 1], w - 1)
+        put(0, 0, ("▄▄▄" + title + "▄" * w)[:w - 1])
         scope_tag = "[Tab: everywhere]" if scope == "here" else "[Tab: this project]"
-        stdscr.addnstr(1, 1, f"filter: {filt}_", w - 22)
-        stdscr.addnstr(1, max(0, w - len(scope_tag) - 2), scope_tag, len(scope_tag))
+        put(1, 1, f"filter: {filt}_"[:max(1, w - 22)])
+        put(1, max(0, w - len(scope_tag) - 2), scope_tag)
         for i, r in enumerate(matches[top:top + vis_cap]):
             e = _enrich_box(cache, r, crashed_sids)
             line = (f"{_fmt_age(e['age']):>10}  {r[4][:18]:18} "
                     f"{e['ended']:7} {e['gist']}")
             attr = curses.A_REVERSE if top + i == cursor else curses.A_NORMAL
             marker = "▸ " if top + i == cursor else "  "
-            stdscr.addnstr(2 + i, 0, (marker + line), w - 1, attr)
+            put(2 + i, 0, (marker + line), attr)
         foot = (f" {len(matches)} of {len(rows)} boxes · Enter resume · "
                 "Esc clear/quit · Tab scope ")
-        stdscr.addnstr(min(h - 2, 2 + vis_cap), 0, foot[:w - 1], w - 1)
-        stdscr.addnstr(min(h - 1, 3 + vis_cap), 0, ("▀" * w)[:w - 1], w - 1)
+        put(min(h - 2, 2 + vis_cap), 0, foot)
+        put(min(h - 1, 3 + vis_cap), 0, "▀" * (w - 1))
         stdscr.refresh()
         ch = stdscr.getch()
         if ch in (curses.KEY_UP,):
