@@ -1851,28 +1851,54 @@ def cmd_doctor(as_json=False):
     print(f"  log: {LOG} ({len(log)} lines)")
 
 
+def _version_of(bin_path):
+    """(major, minor, patch) of the manifest beside a blackbox binary, or
+    None when there is no parseable manifest there."""
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.realpath(bin_path)))
+        v = json.load(open(os.path.join(
+            root, ".claude-plugin", "plugin.json"))).get("version", "")
+        return tuple(int(x) for x in v.split("."))
+    except Exception:
+        return None
+
+
 def _drop_bin_path():
     """Record where this binary lives, so the /rescue skill and the plugin's
     hook commands can find it regardless of install method (plugin cache,
-    manual clone, moved directory) — the path is refreshed on every run."""
+    manual clone, moved directory). Version-guarded: after a plugin update,
+    panes still running OLD hooks kept overwriting this with their stale
+    cache path, so `blackbox` on PATH ping-ponged between versions with
+    every hook that fired (observed live: 1.3.2 reclaiming the path hours
+    after 1.3.10 shipped). An older version never overwrites a newer one;
+    equal or newer refreshes, so moved clones still update."""
     try:
+        me = os.path.realpath(os.path.abspath(sys.argv[0]))
+        bp = os.path.join(STATE, "bin-path")
+        try:
+            recorded = open(bp).read().strip()
+        except OSError:
+            recorded = ""
+        if recorded and recorded != me and os.access(recorded, os.X_OK):
+            mine, theirs = _version_of(me), _version_of(recorded)
+            if mine is not None and theirs is not None and mine < theirs:
+                return  # never demote the recorded binary
         os.makedirs(STATE, exist_ok=True)
-        with open(os.path.join(STATE, "bin-path"), "w") as f:
-            f.write(os.path.realpath(os.path.abspath(sys.argv[0])))
+        with open(bp, "w") as f:
+            f.write(me)
         # Opportunistic PATH shim: if ~/.local/bin exists, keep a symlink
         # there so recovery is typed as `blackbox rescue <id>` instead of a
         # full path — profile gymnastics are this tool's job, not the user's.
         lb = os.path.join(HOME, ".local", "bin")
         if os.path.isdir(lb):
             link = os.path.join(lb, "blackbox")
-            target = os.path.realpath(os.path.abspath(sys.argv[0]))
             try:
                 if os.path.islink(link):
-                    if os.path.realpath(link) != target:
+                    if os.path.realpath(link) != me:
                         os.unlink(link)
-                        os.symlink(target, link)
+                        os.symlink(me, link)
                 elif not os.path.exists(link):
-                    os.symlink(target, link)
+                    os.symlink(me, link)
             except OSError:
                 pass
     except Exception:
