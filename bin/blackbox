@@ -509,27 +509,40 @@ def _salvage(transcript_path):
     title = ""
     prompts = []
     try:
-        with open(transcript_path, errors="ignore") as f:
-            for line in f:
-                try:
-                    d = json.loads(line)
-                except Exception:
-                    continue
+        # utf-8-sig: a BOM otherwise breaks json.loads on the first line,
+        # which is exactly where ai-title tends to live (drilled).
+        f = open(transcript_path, encoding="utf-8-sig", errors="ignore")
+    except OSError:
+        return title, prompts
+    with f:
+        for line in f:
+            # Per-line isolation: salvage runs on the weirdest files this tool
+            # ever touches, and one poisoned record must cost one record, not
+            # every stub after it — a silently truncated outline reads as "that
+            # was the whole session" (drilled: a dict-valued lastPrompt used to
+            # drop the rest of the file).
+            try:
+                d = json.loads(line)
                 if d.get("type") == "ai-title":
-                    title = d.get("aiTitle", title)
+                    t = d.get("aiTitle")
+                    if isinstance(t, str) and t.strip():
+                        title = t.strip()
                 elif d.get("type") == "last-prompt":
+                    lp = d.get("lastPrompt")
+                    if not isinstance(lp, str):
+                        continue
                     # Collapse internal newlines (a multi-line prompt would
                     # break the numbered outline) and enforce the ~200-char
                     # stub the output header promises — records are usually
                     # that short already, but nothing guarantees it.
-                    p = " ".join(d.get("lastPrompt", "").split())[:200]
+                    p = " ".join(lp.split())[:200]
                     # Teammate/system relays are machinery, not the person's prompts.
                     if p.startswith("Another Claude session sent"):
                         continue
                     if p and (not prompts or prompts[-1] != p):
                         prompts.append(p)
-    except Exception:
-        pass
+            except Exception:
+                continue
     return title, prompts
 
 
