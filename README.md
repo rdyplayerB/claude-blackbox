@@ -130,7 +130,7 @@ themselves on their next completed turn.
 Install once and the whole machine is covered, including profiles that do
 not exist yet. Claude Code treats every `CLAUDE_CONFIG_DIR` as its own
 world with its own settings, so a plugin enabled in one profile does
-nothing for the others — a hole that once swallowed a session on this
+nothing for the others. That hole once swallowed a session on this
 machine while diagnostics said everything was fine. blackbox closes it by
 wiring itself: at every session start it reads the `CLAUDE_CONFIG_DIR` of
 running claude processes, and any profile it has never wired before gets
