@@ -78,9 +78,11 @@ Three hooks and a directory of small JSON files, with no daemon and no
 database.
 
 1. **SessionStart** writes `~/.blackbox/live/<session-id>.json`: pid, cwd,
-   git branch, config dir, transcript path. If the session reports no
-   transcript path, a warning is printed into the session itself before any
-   work happens.
+   git branch, config dir, transcript path, and the launch flags the session
+   was started with (permission mode, model), so a rescue can re-launch it
+   the way it was actually running. If the session reports no transcript
+   path, a warning is printed into the session itself before any work
+   happens.
 2. **Stop** fires after every completed turn. It stamps the marker, then
    checks the transcript for real conversation records. A completed turn
    that produced none means the session is not saving, and the marker gets a

@@ -1,6 +1,6 @@
 {
   "name": "blackbox",
-  "version": "1.3.12",
+  "version": "1.3.13",
   "description": "Crash recovery for Claude Code. A flight recorder for every session: know when one died, resume it with full context, and get warned the moment a live session isn't saving its transcript.",
   "author": {
     "name": "rdyplayerB"
