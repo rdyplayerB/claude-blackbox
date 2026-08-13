@@ -1010,7 +1010,7 @@ def crashed_sessions():
         # process). Flag rather than hide — hiding would delay a real rescue,
         # but resuming a live session collides with it.
         try:
-            if time.time() - _last_activity(tp) < 300:
+            if time.time() - _last_activity(tp) < 300 and _still_writing(tp):
                 mark["maybe_live"] = True
         except OSError:
             pass
@@ -1197,6 +1197,23 @@ def _last_activity(tp):
             return os.path.getmtime(tp)
         except OSError:
             return 0
+
+
+def _still_writing(tp, settle=0.4):
+    """Is something appending to this transcript RIGHT NOW? Recency cannot
+    answer that on its own: a crash leaves fresh writes behind for as long as
+    it takes anyone to notice, so a freshness test alone flags every genuine
+    crash through its first five minutes — exactly the window rescues happen
+    in, and the prompt it raises ("may still be RUNNING") reads as doubt about
+    a session the user watched die. Two stats a beat apart separate the cases:
+    a dead session's file stops changing, a live one's does not."""
+    try:
+        before = os.stat(tp)
+        time.sleep(settle)
+        after = os.stat(tp)
+    except OSError:
+        return False
+    return (after.st_size, after.st_mtime) != (before.st_size, before.st_mtime)
 
 
 def _cwd_from_transcript(tp):
