@@ -1371,10 +1371,15 @@ def _recent_sessions(cwd=None, limit=5):
             u, a = _preview(tp, tail_bytes=300_000)
             m["last_user"], m["last_assistant"] = u, a
             # A session with no marker can still be RUNNING (it started under
-            # an unhooked root). An unaccounted live claude in its directory,
-            # or a transcript written moments ago, is the tell.
+            # an unhooked root). An unaccounted live claude in its directory
+            # is the tell — or fresh writes, but only when corroborated by
+            # _still_writing: bare recency flagged every just-closed session
+            # through its first five minutes, which is exactly the window a
+            # user reopens a window they closed (same false positive v1.3.17
+            # fixed in crashed_sessions).
             act = _last_activity(tp)
-            if orphans.get(m.get("cwd", ""), 0) > 0 or time.time() - act < 300:
+            if orphans.get(m.get("cwd", ""), 0) > 0 or \
+                    (time.time() - act < 300 and _still_writing(tp)):
                 m["maybe_live"] = True
             mt = act or mt
         m["age"] = time.time() - mt
