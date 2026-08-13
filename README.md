@@ -77,6 +77,48 @@ missing, and blackbox adds them:
 Three hooks and a directory of small JSON files, with no daemon and no
 database.
 
+```text
+   WHILE SESSIONS RUN                      WHEN YOU GO LOOKING
+   any profile, any config root
+
+   claude ─ profile A ┐                    $ blackbox    /rescue
+   claude ─ profile B ┤                                    │
+   claude ─ profile C ┘                                    │
+                     │                                     │
+                     │  SessionStart  write the marker     │
+                     │  Stop (a turn) stamp it, then       │
+                     │                check it saved       │
+                     │  SessionEnd    delete the marker    │
+                     ▼                                     ▼
+   ┌──────────────────────────────┐        ┌──────────────────────────────┐
+   │ ~/.blackbox/                 │        │ marker + dead pid            │
+   │   live/<sid>.json  pid, cwd, │        │   = a crash to rescue        │
+   │     branch, config dir,      │        │ marker + live pid, but the   │
+   │     transcript path, flags   │───────▶│   transcript is not growing  │
+   │   roots.json  every config   │  read  │   = losing it right now      │
+   │     root ever seen           │        │ no marker for a session      │
+   │   log.jsonl  every hook,     │        │   = sweep every known root   │
+   │     verdict, hazard, rescue  │        └───────────────┬──────────────┘
+   └──────────────────────────────┘
+                                                           │
+   ┌──────────────────────────────┐        ┌──────────────────────────────┐
+   │ <config root>/projects/      │        │ the picker                   │
+   │   <slug>/<sid>.jsonl         │        │ ▸ T-45m crashed parkfinder   │
+   │ Claude Code's own transcript │───────▶│   T-2h  closed  brewlog      │
+   │ the source of truth: never   │  gist  │   T-8h  closed  synthkeys    │
+   │ copied, never moved          │        └───────────────┬──────────────┘
+   └──────────────────────────────┘
+                                                           │
+                                                           ▼
+                                           exec claude --resume <sid>
+                                           in its own cwd, its config
+                                           root, its original flags
+```
+
+Left column is everything on disk: markers blackbox writes, and transcripts
+only Claude Code writes and only blackbox reads. Right column is every way in,
+and they all end at the same exec.
+
 1. **SessionStart** writes `~/.blackbox/live/<session-id>.json`: pid, cwd,
    git branch, config dir, transcript path, and the launch flags the session
    was started with (permission mode, model), so a rescue can re-launch it
@@ -140,6 +182,19 @@ wiring itself: at every session start it reads the `CLAUDE_CONFIG_DIR` of
 running claude processes, and any profile it has never wired before gets
 wired automatically (through the plugin system when installed, manual
 hooks otherwise; ~60ms, atomic, backed up).
+
+```text
+   ┌────────────────────────────────────────────────────────────────────┐
+   │ ~/.claude          wired: plugin   ✓   sessions recorded           │
+   │ ~/profiles/work    wired: hooks    ✓   sessions recorded           │
+   │ ~/profiles/side    never wired     ✗   sessions INVISIBLE          │
+   └───────────────────────────────────────────────────┴────────────────┘
+                                                       ▲
+   at every session start, in a root                   │  wired at most
+   that is already wired:                              │  once, ever
+     ps eww ─▶ CLAUDE_CONFIG_DIR of every ─────────────┘
+               running claude process
+```
 
 Intent always wins over convenience: each profile is auto-wired at most
 once, so disabling blackbox anywhere sticks; `uninstall.sh <root>` removes
