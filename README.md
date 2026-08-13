@@ -63,7 +63,7 @@ missing, and blackbox adds them:
 
 <p align="center">
   <img src="assets/demo.gif" width="920"
-       alt="A real claude session is SIGKILLed mid-task, blackbox lists it with its last exchange and resume command, and the resumed session reports exactly how far it got: numbers 1 through 6.">
+       alt="A real claude session is SIGKILLed mid-task. Typing blackbox opens the picker with that crash at the top of the list, above older boxes from the same project. Enter resumes it in place, and the rescued session reports exactly how far it got: numbers 1 through 20.">
 </p>
 
 ```text
