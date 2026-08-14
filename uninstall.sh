@@ -89,6 +89,15 @@ elif [ -e "$ROOT/skills/rescue" ]; then
   echo "note: $ROOT/skills/rescue is not the symlink install.sh creates — left in place"
 fi
 
+# The PATH shim (~/.local/bin/blackbox) may serve OTHER roots, so it is left
+# alone while its target exists. A dangling one serves nobody — the binary it
+# pointed at is gone — so that case is cleaned up here (and by the CLI itself
+# on its next run from any surviving install).
+if [ -L "$HOME/.local/bin/blackbox" ] && [ ! -e "$HOME/.local/bin/blackbox" ]; then
+  rm "$HOME/.local/bin/blackbox"
+  echo "removed dangling ~/.local/bin/blackbox symlink"
+fi
+
 # An uninstall is explicit intent: stop the auto-wirer from re-wiring this
 # machine behind the user's back (hooks in still-running sessions would
 # otherwise resurrect the install within minutes).
