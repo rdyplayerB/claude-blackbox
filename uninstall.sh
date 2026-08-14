@@ -24,13 +24,23 @@ except ValueError as e:
     sys.exit(f"blackbox: {sys.argv[1]} is not valid JSON ({e}). "
              "Nothing was changed.")
 hooks = d.get("hooks", {})
+if not isinstance(hooks, dict):
+    # A malformed hooks section cannot contain our hooks; leave it alone and
+    # continue to the plugin-enablement removal below.
+    hooks = {}
 for event in list(hooks):
+    if not isinstance(hooks[event], list):
+        continue
     kept = []
     for entry in hooks[event]:
+        if not isinstance(entry, dict):
+            kept.append(entry)
+            continue
         # Precise match — a bare "blackbox" substring would also delete
         # unrelated user hooks that merely mention the word.
         inner = [h for h in entry.get("hooks", [])
-                 if '/bin/blackbox" hook' not in h.get("command", "")]
+                 if not isinstance(h, dict)
+                 or '/bin/blackbox" hook' not in h.get("command", "")]
         if inner:
             entry["hooks"] = inner
             kept.append(entry)

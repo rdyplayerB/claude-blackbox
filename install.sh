@@ -69,6 +69,15 @@ except ValueError as e:
     sys.exit(f"blackbox: {sys.argv[1]} is not valid JSON ({e}). "
              "Fix it (or delete it) and re-run — nothing was changed.")
 hooks = d.setdefault("hooks", {})
+# A hand-edited file can have hooks as a list/string/null. Refuse with a
+# sentence instead of a traceback — the backup/restore guard treats a
+# traceback as failure anyway, but the user deserves to know what to fix.
+if not isinstance(hooks, dict) or any(
+        not isinstance(v, list) or any(not isinstance(e, dict) for e in v)
+        for v in hooks.values()):
+    sys.exit(f"blackbox: the hooks section in {sys.argv[1]} is not the "
+             "expected shape (an object of event -> list of entries). "
+             "Fix it by hand and re-run — nothing was changed.")
 
 def ensure(event, cmd):
     entries = hooks.setdefault(event, [])

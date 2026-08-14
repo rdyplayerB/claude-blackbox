@@ -351,6 +351,9 @@ def _wire_root(root):
             shutil.copy2(sp_real, sp_real + ".bak-blackbox-autowire")
         except OSError:
             return False
+    if not isinstance(s, dict) or not isinstance(s.get("hooks", {}), dict) \
+            or not isinstance(s.get("enabledPlugins", {}), dict):
+        return False  # hand-edited shapes we will not auto-modify
     if _plugin_installed_anywhere():
         s.setdefault("enabledPlugins", {})["blackbox@rdyplayerB"] = True
         mode = "plugin"
