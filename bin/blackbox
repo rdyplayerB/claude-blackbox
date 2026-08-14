@@ -414,7 +414,13 @@ def _autowire():
                      err=traceback.format_exc()[-800:])
         if changed:
             tmp = AUTOWIRED + ".tmp"
-            json.dump(done, open(tmp, "w"))
+            # with-block, not a bare open: a write that fails at flush time
+            # (disk full) must fail INSIDE the try, or Python prints an
+            # 'Exception ignored' traceback at finalization — stderr noise
+            # in a hook that promises to swallow everything (drilled on a
+            # deliberately full disk image).
+            with open(tmp, "w") as f:
+                json.dump(done, f)
             os.replace(tmp, AUTOWIRED)
     except Exception:
         pass  # wiring convenience must never break a session
@@ -444,7 +450,10 @@ def _remember_root(root):
         roots.append(root)
         try:
             os.makedirs(STATE, exist_ok=True)
-            json.dump(roots, open(ROOTS, "w"))
+            # with-block: see _autowire — a flush-time failure must land in
+            # this except, not in the interpreter's finalizer.
+            with open(ROOTS, "w") as f:
+                json.dump(roots, f)
         except Exception:
             pass
     return roots
