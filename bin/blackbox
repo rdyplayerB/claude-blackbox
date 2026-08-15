@@ -1825,8 +1825,14 @@ def cmd_scan(filter_cwd=None):
             u, _ = _preview(p, tail_bytes=300_000)
             if u:
                 print(f"                you : {u[:120]}")
-            print(f"                resume: CLAUDE_CONFIG_DIR={shlex.quote(root)} "
-                  f"claude --resume {shlex.quote(sid)}")
+            # Build this the one way every other surface builds it. Hand-rolling
+            # it here had drifted: no `cd` into the project (so a copied command
+            # resumed the session in whatever directory you happened to be in,
+            # the exact confusion a rescue is supposed to remove) and none of
+            # the session's launch flags.
+            print("                resume: " + _resume_cmd(
+                {"session_id": sid, "cwd": _cwd_from_transcript(p),
+                 "config_dir": root, "transcript_path": p}))
     if want and total_shown == 0:
         print(f"blackbox: no saved sessions found for {filter_cwd} in any known root.")
     _log("scan", roots=scanned, cwd=filter_cwd or "")
