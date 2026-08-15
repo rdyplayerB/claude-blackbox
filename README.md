@@ -234,6 +234,8 @@ The rest of the surface:
 blackbox rescue          # same picker (numbered list when not a real terminal)
 blackbox rescue <id>     # one command, any session: crashed or cleanly closed,
                          # any profile; handles cd + CLAUDE_CONFIG_DIR + exec
+blackbox rescue <id> --dangerously-skip-permissions   # flags pass through
+blackbox flags <args>    # flags every rescue should add (set once)
 /rescue                  # inside any Claude session: this project's sessions + commands
 blackbox list            # just show what's rescuable
 blackbox scan [--cwd d]  # no markers needed: sweep storage roots (pre-install crashes)
@@ -253,7 +255,24 @@ losses that predate blackbox entirely.
 
 Everything Claude Code saved: the full conversation, with all its context,
 exactly as the transcript on disk recorded it. The resumed session picks up
-where the dead one stopped.
+where the dead one stopped, in the project directory it ran in, under the
+config profile that stored it, with the launch flags it was started with.
+
+Those flags are worth a note, because the conversation is not the whole
+session: a rescue that quietly drops `--dangerously-skip-permissions` hands
+back a session that interrogates you about every command. blackbox records
+the behavior-shaping flags (permission mode, model) at session start and
+re-applies them. When a session has none of its own to record, as happens
+when it was itself started by `claude --resume`, your standing default fills
+the gap:
+
+```
+blackbox flags --dangerously-skip-permissions   # set once
+blackbox rescue <id> --model opus               # or per rescue; typed wins
+```
+
+Precedence is most-specific-first: flags you type on the rescue command, then
+the session's own recorded flags, then your default.
 
 One thing sits outside any tool's reach: the model's context window. A
 conversation long enough to need compaction (Claude Code summarizing older

@@ -19,6 +19,9 @@ Commands:
   blackbox                 the Black Box Picker: type to filter, Enter resumes
   blackbox list [--json]   crashed sessions (marker present, pid dead)
   blackbox rescue [id]     picker, or resume a session id directly
+                           trailing claude flags pass through, e.g.
+                           blackbox rescue 5ba72f4d --dangerously-skip-permissions
+  blackbox flags [args]    show / set / --clear the flags every rescue adds
   blackbox scan            registry-free sweep of every known storage root
   blackbox doctor          is the recorder recording? hooks, errors, coverage
 """
@@ -35,6 +38,7 @@ HOME = os.path.expanduser("~")
 STATE = os.path.join(HOME, ".blackbox")
 LIVE = os.path.join(STATE, "live")
 ROOTS = os.path.join(STATE, "roots.json")
+RESUME_FLAGS = os.path.join(STATE, "resume-flags")
 LOG = os.path.join(STATE, "log.jsonl")
 LOG_MAX_BYTES = 5_000_000
 LOG_KEEP_LINES = 2000
@@ -658,6 +662,18 @@ def _fmt_age(sec):
     return f"{sec // 86400}d {sec % 86400 // 3600}h ago"
 
 
+def _prior_flags(sid):
+    """Flags already recorded for this session id, from its live marker or the
+    consumed .rescued copy a rescue just left behind."""
+    for name in (sid + ".json", sid + ".json.rescued"):
+        mk = _load_marker(os.path.join(LIVE, name))
+        if mk:
+            got = _filter_launch_flags(mk.get("launch_flags", []))
+            if got:
+                return got
+    return []
+
+
 def _launch_flags(pid):
     """The flags the session was originally launched with, read from the live
     process — the whitelisted ones that shape how the session behaves and are
@@ -700,6 +716,40 @@ def _filter_launch_flags(toks):
     return flags
 
 
+def _default_flags():
+    """The flags you normally start Claude Code with, applied to any rescue
+    that has none of its own. Set once (`blackbox flags ...`), because the
+    session's own argv cannot always supply them: a session that was itself
+    started by `claude --resume` carries no flags to capture, so a rescued
+    session used to come back in default permission mode and stay that way
+    through every later rescue."""
+    env = os.environ.get("BLACKBOX_RESUME_FLAGS")
+    raw = env if env is not None else _read_text(RESUME_FLAGS)
+    try:
+        return shlex.split(raw or "")
+    except ValueError:
+        return []
+
+
+def _read_text(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _resolve_flags(mark, explicit=None):
+    """Which flags a resume should carry, most specific first:
+    what you typed on this command line, then what the session itself ran
+    with, then your standing default. Typed flags are trusted verbatim (you
+    are holding the keyboard); flags read from a marker file are filtered."""
+    if explicit:
+        return list(explicit)
+    own = _filter_launch_flags(mark.get("launch_flags", []))
+    return own or _default_flags()
+
+
 def _resume_cmd(mark):
     """The exact incantation that brings this session back. shlex-quoted, so a
     path with spaces, quotes, or $ survives the copy-paste. The config root is
@@ -711,7 +761,7 @@ def _resume_cmd(mark):
     if cd:
         parts.append(f"CLAUDE_CONFIG_DIR={shlex.quote(cd)}")
     parts += ["claude", "--resume", shlex.quote(mark["session_id"])]
-    parts += _filter_launch_flags(mark.get("launch_flags", []))
+    parts += [shlex.quote(f) for f in _resolve_flags(mark)]
     return f"cd {shlex.quote(mark.get('cwd', '.'))} && " + " ".join(parts)
 
 
@@ -752,8 +802,12 @@ def hook_start():
         "last_turn": time.time(),
     }
     # Rescue must re-launch with the same behavior-shaping flags (permission
-    # mode, model); the conversation alone is not the whole session.
-    mark["launch_flags"] = _launch_flags(mark["pid"])
+    # mode, model); the conversation alone is not the whole session. A session
+    # started BY a rescue runs as `claude --resume <id>` and so has no flags of
+    # its own to capture — an empty capture must therefore never erase flags
+    # already known for this session, or one bare relaunch loses the mode
+    # permanently and every later rescue re-loses it (observed in production).
+    mark["launch_flags"] = _launch_flags(mark["pid"]) or _prior_flags(sid)
     _write_marker(os.path.join(LIVE, sid + ".json"), mark)
     _log("register", sid=sid[:8], cwd=cwd, has_transcript_path=bool(d.get("transcript_path")))
 
@@ -850,7 +904,7 @@ def hook_stop():
             "last_turn": time.time(),
             "registered_late": True,
         }
-        mark["launch_flags"] = _launch_flags(mark["pid"])
+        mark["launch_flags"] = _launch_flags(mark["pid"]) or _prior_flags(sid)
         try:
             os.makedirs(LIVE, exist_ok=True)
             _write_marker(p, mark)
@@ -881,10 +935,12 @@ def hook_stop():
         if cur and mark.get("pid") != cur:
             _log("pid.heal", sid=sid[:8], old=mark.get("pid"), new=cur)
             mark["pid"] = cur
-            mark["launch_flags"] = _launch_flags(cur)
-        elif "launch_flags" not in mark:
-            # Marker written by a version that predates flag capture.
-            mark["launch_flags"] = _launch_flags(mark.get("pid"))
+            mark["launch_flags"] = _launch_flags(cur) or _prior_flags(sid)
+        elif not mark.get("launch_flags"):
+            # Marker written by a version that predates flag capture, or one
+            # whose capture came up empty; either way, try again this turn.
+            mark["launch_flags"] = (_launch_flags(mark.get("pid"))
+                                    or _prior_flags(sid))
         # Ground truth: after a completed turn, a saving session's transcript
         # holds real message records. A skeleton or missing file here means the
         # session is burning unrecoverable context RIGHT NOW — flagged so
@@ -1106,10 +1162,11 @@ def cmd_list(as_json=False, show_all=False):
     return crashed
 
 
-def _exec_resume(m):
+def _exec_resume(m, extra_flags=None):
     """Become the resumed session: consume any marker (reversibly), set the
     right config root, cd to the project, exec claude."""
     sid = m["session_id"]
+    flags = _resolve_flags(m, extra_flags)
     # The exec below replaces this process, so this line is the only record of
     # exactly what was launched.
     _log("rescue", sid=sid[:8], cwd=m.get("cwd", ""),
@@ -1153,7 +1210,8 @@ def _exec_resume(m):
     # flush is not optional: execvpe replaces the process without running
     # Python's exit handlers, so an unflushed line is simply lost.
     print(f"blackbox: resuming {sid[:8]} in {os.getcwd().replace(HOME, '~')}"
-          + (f" (profile {cd.replace(HOME, '~')})" if cd else ""), flush=True)
+          + (f" (profile {cd.replace(HOME, '~')})" if cd else "")
+          + (f" {' '.join(flags)}" if flags else ""), flush=True)
     # Replace this process with the resumed session — the terminal becomes
     # claude. PATH is whatever environment this was invoked from, and two
     # production rescues died in 2ms because that environment could not find
@@ -1162,9 +1220,11 @@ def _exec_resume(m):
     last_err = None
     # Re-launch with the flags the dead session actually ran with (permission
     # mode, model): a rescue that drops --dangerously-skip-permissions hands
-    # back a session that interrogates its owner. Filtered again here; the
-    # marker is a plain file and is not trusted to name arbitrary argv.
-    argv_tail = ["--resume", sid] + _filter_launch_flags(m.get("launch_flags", []))
+    # back a session that interrogates its owner. Resolved above — typed flags
+    # verbatim, otherwise the session's own (filtered, since a marker is a
+    # plain file and is not trusted to name arbitrary argv), otherwise the
+    # standing default.
+    argv_tail = ["--resume", sid] + flags
     try:
         os.execvpe("claude", ["claude"] + argv_tail, env)
     except OSError as e:
@@ -1571,11 +1631,11 @@ def _picker_ui(stdscr, state):
             cursor = 0
 
 
-def cmd_picker():
+def cmd_picker(extra_flags=None):
     """Full-screen box selection when we own a real terminal; the numbered
     prompt flow otherwise (pipes, dumb terminals, scripts)."""
     if not (sys.stdout.isatty() and sys.stdin.isatty()):
-        return cmd_rescue()
+        return cmd_rescue(extra_flags=extra_flags)
     here = os.getcwd()
     rows, crashed_sids = _gather_boxes(cwd=here)
     scope = "here"
@@ -1605,7 +1665,7 @@ def cmd_picker():
             return
         if sure != "y":
             return
-    _exec_resume(m)
+    _exec_resume(m, extra_flags)
 
 
 def _print_picker(sessions, heading):
@@ -1626,7 +1686,7 @@ def _print_picker(sessions, heading):
             print(f"      {gist[:100]}")
 
 
-def cmd_rescue(target=None):
+def cmd_rescue(target=None, extra_flags=None):
     if target:
         matches, truncated = _find_session_anywhere(target)
         if not matches:
@@ -1700,7 +1760,7 @@ def cmd_rescue(target=None):
             return
         if sure != "y":
             return
-    _exec_resume(m)
+    _exec_resume(m, extra_flags)
     return
 
 
@@ -1967,6 +2027,60 @@ def _version_of(bin_path):
         return None
 
 
+VALUE_FLAGS = {"--permission-mode", "--model", "--append-system-prompt",
+               "--allowed-tools", "--disallowed-tools", "--add-dir",
+               "--settings", "--mcp-config"}
+
+
+def _split_rescue_args(rest):
+    """(session id, flags for claude) from what was typed after `rescue`.
+    The id is the first bare word — but a flag's VALUE is a bare word too
+    (`--model opus`), so a token following a value-taking flag is never
+    mistaken for the id (it was, and the value was silently dropped)."""
+    target, extra, expect_value = None, [], False
+    for a in rest:
+        if expect_value:
+            extra.append(a)
+            expect_value = False
+        elif a.startswith("-"):
+            extra.append(a)
+            expect_value = a in VALUE_FLAGS
+        elif target is None:
+            target = a
+        else:
+            extra.append(a)
+    return target, extra
+
+
+def cmd_flags(args):
+    """Show, set, or clear the flags every rescue adds by default."""
+    if args == ["--clear"]:
+        try:
+            os.remove(RESUME_FLAGS)
+        except OSError:
+            pass
+        print("blackbox: default resume flags cleared")
+        return
+    if args:
+        os.makedirs(STATE, exist_ok=True)
+        line = " ".join(shlex.quote(a) for a in args)
+        with open(RESUME_FLAGS, "w") as f:
+            f.write(line + "\n")
+        print(f"blackbox: rescues will now add {line}")
+        return
+    cur = _default_flags()
+    if os.environ.get("BLACKBOX_RESUME_FLAGS") is not None:
+        print(f"blackbox: {' '.join(cur) if cur else '(none)'}  "
+              "[from BLACKBOX_RESUME_FLAGS]")
+    elif cur:
+        print(f"blackbox: rescues add {' '.join(cur)}  ({RESUME_FLAGS})")
+    else:
+        print("blackbox: no default resume flags set. Set them with e.g.\n"
+              "  blackbox flags --dangerously-skip-permissions")
+    print("A session that recorded its own flags keeps those; flags typed on a"
+          "\nrescue command win over both.")
+
+
 def _drop_bin_path():
     """Record where this binary lives, so the /rescue skill and the plugin's
     hook commands can find it regardless of install method (plugin cache,
@@ -2033,10 +2147,17 @@ def main():
     elif cmd == "list":
         cmd_list(as_json="--json" in args, show_all="--all" in args)
     elif cmd == "rescue":
-        if len(args) > 1:
-            cmd_rescue(target=args[1])
+        # Anything dash-prefixed is for claude, not for us: `blackbox rescue
+        # <id> --dangerously-skip-permissions` reads the way the equivalent
+        # claude command does.
+        rest = args[1:]
+        target, extra = _split_rescue_args(rest)
+        if target:
+            cmd_rescue(target=target, extra_flags=extra)
         else:
-            cmd_picker()
+            cmd_picker(extra_flags=extra)
+    elif cmd == "flags":
+        cmd_flags(args[1:])
     elif cmd == "scan":
         fc = None
         if "--cwd" in args:
