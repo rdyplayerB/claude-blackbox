@@ -22,7 +22,7 @@ Commands:
                            trailing claude flags pass through, e.g.
                            blackbox rescue 5ba72f4d --dangerously-skip-permissions
   blackbox flags [args]    show / set / --clear the flags every rescue adds
-  blackbox scan            registry-free sweep of every known storage root
+  blackbox scan [--json]   registry-free sweep of every known storage root
   blackbox doctor          is the recorder recording? hooks, errors, coverage
 """
 
@@ -1793,7 +1793,7 @@ def _project_slug(cwd):
     return re.sub(r"[^A-Za-z0-9-]", "-", cwd)
 
 
-def cmd_scan(filter_cwd=None):
+def cmd_scan(filter_cwd=None, as_json=False):
     """Registry-free sweep: newest transcripts in every storage root ever seen.
 
     For sessions that predate blackbox (no marker), this is how you find what
@@ -1807,6 +1807,16 @@ def cmd_scan(filter_cwd=None):
     scanned = {}
     want = _project_slug(os.path.abspath(filter_cwd)) if filter_cwd else None
     total_shown = 0
+    # --json exists so the /rescue skill sees cleanly-closed sessions in the
+    # SAME shape as crashed ones. Without it those entries carried no
+    # resume_in_place, so the in-pane shortcut could only ever be offered for
+    # crashes — one more way the offer looked arbitrary to the user.
+    out_json = []
+    crashed_sids = {m["session_id"] for m in crashed_sessions()} if as_json else set()
+    # A scan lists transcripts, and the newest one is usually the session
+    # doing the asking. Marking those explicitly beats leaving the caller to
+    # infer "probably me" from file size.
+    alive_sids = _alive_marker_sids() if as_json else set()
     for root in _all_roots():
         pdir = os.path.join(root, "projects")
         if not os.path.isdir(pdir):
@@ -1833,6 +1843,19 @@ def cmd_scan(filter_cwd=None):
         if want and not rows:
             continue  # keep --cwd output free of empty-root noise
         total_shown += len(rows)
+        if as_json:
+            for mt, sz, proj, sid, p in (rows if want else rows[:12]):
+                rec = _session_record(root, p, sid)
+                rec["alive"] = sid in alive_sids
+                rec["ended"] = ("live" if rec["alive"] else
+                                "crashed" if sid in crashed_sids else "closed")
+                rec["age"] = now - (_last_activity(p) or mt)
+                rec["bytes"] = sz
+                u, a = _preview(p, tail_bytes=300_000)
+                rec["last_user"], rec["last_assistant"] = u, a
+                rec["resume_in_place"] = _resumable_in_place(rec)
+                out_json.append(rec)
+            continue
         print(f"\n=== {label} — {len(rows)} substantive session(s) ===")
         for mt, sz, proj, sid, p in rows if want else rows[:12]:
             kind = _classify(p)
@@ -1851,9 +1874,12 @@ def cmd_scan(filter_cwd=None):
             print("                resume: " + _resume_cmd(
                 {"session_id": sid, "cwd": _cwd_from_transcript(p),
                  "config_dir": root, "transcript_path": p}))
-    if want and total_shown == 0:
+    if as_json:
+        out_json.sort(key=lambda r: _num(r.get("age")))
+        print(json.dumps({"sessions": out_json}, indent=2))
+    elif want and total_shown == 0:
         print(f"blackbox: no saved sessions found for {filter_cwd} in any known root.")
-    _log("scan", roots=scanned, cwd=filter_cwd or "")
+    _log("scan", roots=scanned, cwd=filter_cwd or "", json=bool(as_json))
 
 
 def _version():
@@ -2235,7 +2261,7 @@ def main():
         if "--cwd" in args:
             i = args.index("--cwd")
             fc = args[i + 1] if len(args) > i + 1 else os.getcwd()
-        cmd_scan(filter_cwd=fc)
+        cmd_scan(filter_cwd=fc, as_json="--json" in args)
     elif cmd == "salvage" and len(args) > 1:
         cmd_salvage(args[1])
     elif cmd == "doctor":

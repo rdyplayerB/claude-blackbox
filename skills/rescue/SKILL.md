@@ -38,9 +38,12 @@ recorder" or other black-box jargon. The tool's internals stay internal.
    leaves no crash marker). So collect BOTH:
    - crashed entries from step 1 whose `cwd` matches the current working
      directory, and
-   - `"$BB" scan --cwd "$PWD"` (run it now; no need to ask), which lists
-     every saved session for this project by recency, including
-     cleanly-closed ones and ones from before blackbox was installed.
+   - `"$BB" scan --cwd "$PWD" --json` (run it now; no need to ask), which
+     returns `{"sessions": [...]}`: every saved session for this project,
+     newest first, including cleanly-closed ones and ones from before
+     blackbox was installed. Same field names as step 1, so both sources are
+     read the same way. Entries with `"alive": true` are running right now
+     (usually this very conversation) — never offer those.
    Everything from other projects does not exist as far as this conversation
    is concerned — never list it, never summarize it, never offer it.
 4. **Present the boxes as a selection, not prose — and every option in ONE
@@ -91,7 +94,8 @@ recorder" or other black-box jargon. The tool's internals stay internal.
    shortcut as a second option. blackbox computes that field for you against
    the pane you are asking from; it is true only when the session ran in
    THIS directory under THIS config root. Do not re-derive it by comparing
-   paths yourself.
+   paths yourself, and if the field is missing entirely (an older binary is
+   answering), simply skip the shortcut — the command above always works.
 
    The directory half matters as much as the profile half: the built-in
    `/resume` swaps the conversation but does NOT move the pane, so resuming
