@@ -696,8 +696,11 @@ def _filter_launch_flags(toks):
     """Keep only flags that are known, behavior-shaping, and repeat-safe.
     Applied both when recording (from ps) and again before exec (markers are
     plain files; never exec what a marker says without re-checking)."""
-    bare = {"--dangerously-skip-permissions", "--fast"}
-    valued = {"--permission-mode", "--model"}
+    bare = {"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",
+            "--fast", "--verbose", "--ide", "--safe-mode", "--bare",
+            "--chrome", "--no-chrome", "--strict-mcp-config", "--ax-screen-reader"}
+    valued = {"--permission-mode", "--model", "--agent", "--autocompact",
+              "--max-budget-usd", "--name"}
     flags = []
     i = 0
     while i < len(toks):
@@ -2028,8 +2031,41 @@ def _version_of(bin_path):
 
 
 VALUE_FLAGS = {"--permission-mode", "--model", "--append-system-prompt",
-               "--allowed-tools", "--disallowed-tools", "--add-dir",
-               "--settings", "--mcp-config"}
+               "--system-prompt", "--allowed-tools", "--allowedTools",
+               "--disallowed-tools", "--tools", "--add-dir", "--settings",
+               "--setting-sources", "--mcp-config", "--agent", "--agents",
+               "--autocompact", "--max-budget-usd", "--betas", "--name", "-n",
+               "--plugin-dir", "--plugin-url", "--session-id", "--json-schema",
+               "--input-format", "--output-format"}
+
+# Claude flags that cannot mean anything sensible on a rescue. Everything NOT
+# listed here passes through untouched: claude gains flags regularly, and a
+# recovery tool that gatekeeps its own host ages badly. Only refuse what is
+# genuinely incoherent, and say why.
+CONFLICTING_FLAGS = {
+    "-r": "blackbox already supplies --resume for the session you picked",
+    "--resume": "blackbox already supplies --resume for the session you picked",
+    "-c": "--continue picks the newest conversation; a rescue names an exact one",
+    "--continue": "--continue picks the newest conversation; a rescue names an exact one",
+    "--session-id": "that would start a different session than the one being rescued",
+    "--teleport": "a separate resume mechanism; it would not load this session",
+    "--cloud": "that starts a cloud session rather than reopening this local one",
+    "-p": "--print runs headless and exits; a rescue hands you the live session",
+    "--print": "--print runs headless and exits; a rescue hands you the live session",
+    "--bg": "--background returns immediately instead of becoming your session",
+    "--background": "--background returns immediately instead of becoming your session",
+    "--no-session-persistence": "that stops the session saving its transcript, "
+                               "which is the one loss blackbox cannot undo",
+    "-w": "--worktree starts in a new worktree; a rescue reopens the original directory",
+    "--worktree": "--worktree starts in a new worktree; a rescue reopens the original directory",
+    "-v": "not a session",
+    "--version": "not a session",
+}
+
+
+def _conflicts(flags):
+    """[(flag, why)] for anything that contradicts resuming."""
+    return [(f, CONFLICTING_FLAGS[f]) for f in flags if f in CONFLICTING_FLAGS]
 
 
 def _split_rescue_args(rest):
@@ -2054,6 +2090,12 @@ def _split_rescue_args(rest):
 
 def cmd_flags(args):
     """Show, set, or clear the flags every rescue adds by default."""
+    bad = _conflicts(args)
+    if bad:
+        for f, why in bad:
+            print(f"blackbox: {f} cannot be a default rescue flag — {why}.")
+        print("Nothing was changed.")
+        return
     if args == ["--clear"]:
         try:
             os.remove(RESUME_FLAGS)
@@ -2152,6 +2194,12 @@ def main():
         # claude command does.
         rest = args[1:]
         target, extra = _split_rescue_args(rest)
+        bad = _conflicts(extra)
+        if bad:
+            for f, why in bad:
+                print(f"blackbox: {f} cannot be used with a rescue — {why}.")
+            print("Every other claude flag passes through. Nothing was resumed.")
+            return
         if target:
             cmd_rescue(target=target, extra_flags=extra)
         else:

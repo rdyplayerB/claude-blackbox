@@ -272,7 +272,17 @@ blackbox rescue <id> --model opus               # or per rescue; typed wins
 ```
 
 Precedence is most-specific-first: flags you type on the rescue command, then
-the session's own recorded flags, then your default.
+the session's own recorded flags, then your default. blackbox ships with no
+default of its own, so a rescue changes nothing about how you run Claude Code
+until you say so.
+
+Any claude flag passes through, including ones released after this tool was
+written. The exceptions are the handful that cannot mean anything on a rescue,
+which are refused with the reason rather than passed along to fail oddly:
+`--resume` and `--continue` (a rescue already names an exact session),
+`--session-id`, `--teleport`, `--cloud`, `--print`, `--background`,
+`--worktree`, and `--no-session-persistence`, which would switch off the
+transcript saving that makes recovery possible at all.
 
 One thing sits outside any tool's reach: the model's context window. A
 conversation long enough to need compaction (Claude Code summarizing older
