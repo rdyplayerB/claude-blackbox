@@ -73,21 +73,40 @@ recorder" or other black-box jargon. The tool's internals stay internal.
    - `unrecoverable: true`: the conversation was never saved and nothing can
      restore it; offer `"$BB" salvage <session-id>` only if `salvageable`
      is true. Do not invent hope.
-4b. **Deliver the chosen box** in two or three lines — the offer, in this
-   order:
-     * **If the session lives under THIS session's config root** (its
-       `config_dir` equals `${CLAUDE_CONFIG_DIR:-~/.claude}`): the fastest
-       path needs no new terminal — "To swap this pane to it: type
-       `/resume` and pick the session titled 「its title」 (Ctrl+A widens the
-       picker; note this pane's current conversation stays saved)." The
-       built-in /resume takes names and a picker, not raw ids.
-     * Always also give the terminal form as one short command in a code
-       block: `blackbox rescue <session-id>` if `command -v blackbox`
-       succeeds, otherwise `"$BB" rescue <session-id>`. rescue-by-id handles
-       the project directory, the config profile, and the exec itself —
-       never show the long cd/CLAUDE_CONFIG_DIR/claude form, and never run
-       it yourself or suggest the `!` prefix (`claude --resume` is
-       interactive and replaces its process).
+4b. **Deliver the chosen box.** ALWAYS lead with the same command, so the
+   answer never looks like it changes shape from one rescue to the next:
+
+   ```
+   blackbox rescue <session-id>
+   ```
+
+   (`"$BB" rescue <session-id>` if `command -v blackbox` fails.) This works
+   from any directory, any profile, every time: it handles the project
+   directory, the config profile, the original launch flags, and the exec.
+   Never show the long cd/CLAUDE_CONFIG_DIR/claude form, never run it
+   yourself, never suggest the `!` prefix (`claude --resume` is interactive
+   and replaces its process).
+
+   **Then, ONLY if the entry's `resume_in_place` is true**, add the in-pane
+   shortcut as a second option. blackbox computes that field for you against
+   the pane you are asking from; it is true only when the session ran in
+   THIS directory under THIS config root. Do not re-derive it by comparing
+   paths yourself.
+
+   The directory half matters as much as the profile half: the built-in
+   `/resume` swaps the conversation but does NOT move the pane, so resuming
+   another project's session here would run it against THIS directory and
+   edits would land in the wrong repo. When both match there is nothing to
+   move and the shortcut is genuinely equivalent:
+   "Since that session ran in this directory and profile, you can also swap
+   this pane to it: type `/resume` and pick 「its title」 (Ctrl+A widens the
+   picker; this pane's conversation stays saved)." The built-in picker takes
+   names, not raw ids.
+
+   When you leave the shortcut out, say why in one clause, so its absence
+   reads as a reason rather than a coin flip: "it ran in another project"
+   or "it ran under a different profile", then move on. Never offer
+   `/resume` for a session from another directory or profile at all.
    Skip non-candidates silently: the newest tiny transcripts are usually
    this very conversation and the pane the user just restarted — never
    offer those.

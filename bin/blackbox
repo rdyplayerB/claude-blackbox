@@ -1110,6 +1110,22 @@ def live_at_risk():
     return out
 
 
+def _resumable_in_place(m):
+    """Can the pane asking this question swap to that session with the
+    built-in /resume, without ending up somewhere wrong? Only when the
+    session ran in THIS directory under THIS config root: /resume changes
+    the conversation but never moves the pane, so resuming another project's
+    session here would run it against the wrong repo. Computed here rather
+    than left to the caller, because 'compare these two paths' is exactly
+    the judgement that gets skipped."""
+    try:
+        return (os.path.realpath(m.get("cwd", "")) == os.path.realpath(os.getcwd())
+                and os.path.realpath(m.get("config_dir", "")) ==
+                os.path.realpath(_config_dir()))
+    except OSError:
+        return False
+
+
 def cmd_list(as_json=False, show_all=False):
     """Print the rescue picture and return the crashed list exactly as
     numbered on screen — cmd_rescue indexes THIS list, so what the user sees
@@ -1130,6 +1146,8 @@ def cmd_list(as_json=False, show_all=False):
     if as_json:
         # Machinery is data, not a secret: consumers (the /rescue skill) get
         # the hidden entries too and decide for themselves.
+        for m in crashed + risky + machinery:
+            m["resume_in_place"] = _resumable_in_place(m)
         print(json.dumps({"crashed": crashed, "live_at_risk": risky,
                           "machinery_hidden": [] if show_all else machinery},
                          indent=2))
