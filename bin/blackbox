@@ -2034,7 +2034,11 @@ def cmd_doctor(as_json=False):
     print(f"  hooks fired (24h): {hooks_24h}  {dict(sorted(counts.items()))}")
     if len(vmix) > 1:
         print(f"  ! hooks served by MIXED binary versions (stale panes): "
-              f"{dict(sorted(vmix.items()))} — restart panes to converge")
+              f"{dict(sorted(vmix.items()))}")
+        print("    A session keeps the plugin version it started with, for its"
+              " hooks AND its\n    /rescue skill, so an old pane can still"
+              " follow older rescue behavior.\n    Restart those panes to"
+              " converge; nothing is lost by waiting.")
     elif vmix:
         print(f"  hook binary version (24h): {next(iter(vmix))}")
     if errors:
