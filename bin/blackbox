@@ -1145,6 +1145,15 @@ def _exec_resume(m):
         print(f"blackbox: original cwd {m.get('cwd', '?')!r} no longer exists; "
               "resuming from ~ instead.")
         os.chdir(HOME)
+    # Say where this landed, before the screen fills with the resumed
+    # conversation. A rescue can be launched from anywhere, and the terminal's
+    # own title and prompt still name the directory it was launched FROM —
+    # which left a user unsure whether edits would reach the right repo
+    # (reported in production; the cwd was correct, the feedback was missing).
+    # flush is not optional: execvpe replaces the process without running
+    # Python's exit handlers, so an unflushed line is simply lost.
+    print(f"blackbox: resuming {sid[:8]} in {os.getcwd().replace(HOME, '~')}"
+          + (f" (profile {cd.replace(HOME, '~')})" if cd else ""), flush=True)
     # Replace this process with the resumed session — the terminal becomes
     # claude. PATH is whatever environment this was invoked from, and two
     # production rescues died in 2ms because that environment could not find
