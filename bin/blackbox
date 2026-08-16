@@ -641,16 +641,28 @@ def cmd_salvage(target):
     if not (title or prompts):
         print("blackbox: nothing salvageable in that transcript.")
         return
-    os.makedirs(os.path.join(STATE, "salvage"), exist_ok=True)
     sid = os.path.basename(path)[:-6]
+    doc = (f"# Salvage: {title or sid}\n\n"
+           "The conversation itself was never saved (transcript saving was off).\n"
+           "These are the prompts that drove it, in order, truncated at ~200\n"
+           "chars each — the outline of the work, for re-seeding a new session.\n\n"
+           + "".join(f"{i}. {p}\n\n" for i, p in enumerate(prompts, 1)))
     out = os.path.join(STATE, "salvage", sid + ".md")
-    with open(out, "w") as f:
-        f.write(f"# Salvage: {title or sid}\n\n")
-        f.write("The conversation itself was never saved (transcript saving was off).\n")
-        f.write("These are the prompts that drove it, in order, truncated at ~200\n")
-        f.write("chars each — the outline of the work, for re-seeding a new session.\n\n")
-        for i, p in enumerate(prompts, 1):
-            f.write(f"{i}. {p}\n\n")
+    try:
+        os.makedirs(os.path.join(STATE, "salvage"), exist_ok=True)
+        with open(out, "w") as f:
+            f.write(doc)
+    except OSError as e:
+        # The outline is already in hand. Salvage is the last resort after a
+        # conversation was never saved at all, so refusing to show recovered
+        # work because a directory is unwritable would be the worst possible
+        # moment to be precious about it — print it and say why (drilled: a
+        # read-only state dir used to end in a traceback).
+        _log("salvage", sid=sid[:8], prompts=len(prompts), ok=False, err=str(e))
+        print(f"blackbox: could not write {out} ({e.strerror}). "
+              "Here is the salvage instead:\n")
+        print(doc)
+        return
     _log("salvage", sid=sid[:8], prompts=len(prompts), titled=bool(title))
     print(f"salvaged {len(prompts)} prompt(s)" + (f' · title: "{title}"' if title else ""))
     print(out)
