@@ -2081,7 +2081,13 @@ def cmd_doctor(as_json=False):
                          "missed_detail": missed[:10]},
         "log": {"path": LOG, "lines": len(log)},
         "blackbox": {"version": _version(),
-                     "bin": os.path.realpath(sys.argv[0])},
+                     "bin": os.path.realpath(sys.argv[0]),
+                     # If this is false the recorder cannot record: hooks stay
+                     # silent by design, so the only symptom is sessions going
+                     # missing. Doctor must name it rather than leave the user
+                     # working through causes that do not apply.
+                     "state_writable": os.access(STATE, os.W_OK)
+                     if os.path.isdir(STATE) else os.access(HOME, os.W_OK)},
     }
     if as_json:
         print(json.dumps(report, indent=2))
@@ -2139,6 +2145,9 @@ def cmd_doctor(as_json=False):
               f"blackbox never saw{mach}:")
         for m in cov["missed_detail"]:
             print(f"      {m['project']}  ({m['root']}, last write {m['last_write']})")
+        if not report["blackbox"]["state_writable"]:
+            print(f"    CAUSE: {STATE} is not writable — the hooks cannot record"
+                  "\n    anything at all. Fix the permissions on that directory.")
         print("    Causes: session predates install, hooks not wired for that")
         print("    CLAUDE_CONFIG_DIR, or hooks failing before their first log line.")
     else:
