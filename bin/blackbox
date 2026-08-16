@@ -991,7 +991,15 @@ def hook_stop():
         if kind != "ok":
             if not mark.get("hazard"):
                 _log("hazard.set", sid=sid[:8], kind=kind)
-            mark["hazard"] = "not saving — a completed turn produced no conversation records"
+            # Name the actual cause. _classify already tells them apart, and
+            # the two need different reactions: a deleted file is somebody
+            # cleaning up underneath a live session (the writes go to an
+            # unlinked inode and vanish), while a stub-only file is saving
+            # switched off at launch.
+            mark["hazard"] = (
+                "not saving — its transcript file is gone from disk"
+                if kind == "missing" else
+                "not saving — a completed turn produced no conversation records")
         else:
             if mark.get("hazard"):
                 _log("hazard.cleared", sid=sid[:8])
