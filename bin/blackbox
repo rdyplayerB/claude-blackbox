@@ -173,6 +173,19 @@ def _config_dir():
     return os.environ.get("CLAUDE_CONFIG_DIR", os.path.join(HOME, ".claude"))
 
 
+def _listdir(path):
+    """os.listdir that yields nothing instead of raising. Every directory
+    this tool walks belongs to somebody else — config roots, project folders,
+    the marker dir — and one of them being unreadable (wrong permissions, an
+    unmounted volume, another user's home) must cost that directory only.
+    An uncaught PermissionError here took out scan, doctor, the picker and
+    rescue-by-id together (drilled)."""
+    try:
+        return os.listdir(path)
+    except OSError:
+        return []
+
+
 def _num(x, default=0.0):
     """Numeric coercion for fields read from state files. Anything on disk can
     be garbage (drilled: one string-valued ms in the log crashed doctor, the
@@ -614,7 +627,7 @@ def cmd_salvage(target):
             pdir = os.path.join(root, "projects")
             if not os.path.isdir(pdir):
                 continue
-            for proj in os.listdir(pdir):
+            for proj in _listdir(pdir):
                 p = os.path.join(pdir, proj, target + ".jsonl")
                 if os.path.exists(p):
                     path = p
@@ -785,7 +798,7 @@ def hook_start():
     # that just succeeded re-registers here), plus any .rescued old enough
     # that its rescue clearly wasn't rolled back.
     try:
-        for f in os.listdir(LIVE):
+        for f in _listdir(LIVE):
             if f.endswith(".rescued"):
                 p = os.path.join(LIVE, f)
                 if f.startswith(sid) or time.time() - os.path.getmtime(p) > 7 * 86400:
@@ -1054,7 +1067,7 @@ def crashed_sessions():
         return out
     dead = []
     alive_pids = set()
-    for f in os.listdir(LIVE):
+    for f in _listdir(LIVE):
         if not f.endswith(".json"):
             continue
         mark = _load_marker(os.path.join(LIVE, f))
@@ -1104,7 +1117,7 @@ def live_at_risk():
     out = []
     if not os.path.isdir(LIVE):
         return out
-    for f in os.listdir(LIVE):
+    for f in _listdir(LIVE):
         if not f.endswith(".json"):
             continue
         mark = _load_marker(os.path.join(LIVE, f))
@@ -1356,7 +1369,7 @@ def _session_record(root, tp, sid):
 def _alive_marker_sids():
     out = set()
     if os.path.isdir(LIVE):
-        for f in os.listdir(LIVE):
+        for f in _listdir(LIVE):
             if f.endswith(".json"):
                 mk = _load_marker(os.path.join(LIVE, f))
                 if mk is not None and _alive(mk.get("pid"), mk.get("started_at")):
@@ -1382,11 +1395,11 @@ def _find_session_anywhere(prefix, max_matches=7):
         pdir = os.path.join(root, "projects")
         if not os.path.isdir(pdir):
             continue
-        for proj in sorted(os.listdir(pdir)):
+        for proj in sorted(_listdir(pdir)):
             full = os.path.join(pdir, proj)
             if not os.path.isdir(full):
                 continue
-            for f in sorted(os.listdir(full)):
+            for f in sorted(_listdir(full)):
                 if not f.endswith(".jsonl") or not f.startswith(prefix):
                     continue
                 sid = f[:-6]
@@ -1425,7 +1438,7 @@ def _recent_sessions(cwd=None, limit=5):
                if not m.get("machinery")}
     alive_sids = set()
     if os.path.isdir(LIVE):
-        for f in os.listdir(LIVE):
+        for f in _listdir(LIVE):
             if f.endswith(".json"):
                 mk = _load_marker(os.path.join(LIVE, f))
                 if mk is not None and _alive(mk.get("pid"), mk.get("started_at")):
@@ -1436,7 +1449,7 @@ def _recent_sessions(cwd=None, limit=5):
         pdir = os.path.join(root, "projects")
         if not os.path.isdir(pdir):
             continue
-        for proj in os.listdir(pdir):
+        for proj in _listdir(pdir):
             if want and proj != want:
                 continue
             if "claude-mem-observer" in proj:
@@ -1444,7 +1457,7 @@ def _recent_sessions(cwd=None, limit=5):
             full = os.path.join(pdir, proj)
             if not os.path.isdir(full):
                 continue
-            for f in os.listdir(full):
+            for f in _listdir(full):
                 if not f.endswith(".jsonl"):
                     continue
                 sid = f[:-6]
@@ -1461,7 +1474,7 @@ def _recent_sessions(cwd=None, limit=5):
     rows.sort(reverse=True)
     alive_pids = set()
     if os.path.isdir(LIVE):
-        for f in os.listdir(LIVE):
+        for f in _listdir(LIVE):
             if f.endswith(".json"):
                 mk = _load_marker(os.path.join(LIVE, f))
                 if mk is not None and mk["session_id"] in alive_sids:
@@ -1502,7 +1515,7 @@ def _gather_boxes(cwd=None, cap=400):
     alive = _alive_marker_sids()
     crashed_sids = set()
     if os.path.isdir(LIVE):
-        for f in os.listdir(LIVE):
+        for f in _listdir(LIVE):
             if f.endswith(".json"):
                 mk = _load_marker(os.path.join(LIVE, f))
                 if mk is not None and mk["session_id"] not in alive:
@@ -1513,7 +1526,7 @@ def _gather_boxes(cwd=None, cap=400):
         pdir = os.path.join(root, "projects")
         if not os.path.isdir(pdir):
             continue
-        for proj in os.listdir(pdir):
+        for proj in _listdir(pdir):
             if want and proj != want:
                 continue
             if "claude-mem-observer" in proj:
@@ -1521,7 +1534,7 @@ def _gather_boxes(cwd=None, cap=400):
             full = os.path.join(pdir, proj)
             if not os.path.isdir(full):
                 continue
-            for f in os.listdir(full):
+            for f in _listdir(full):
                 if not f.endswith(".jsonl"):
                     continue
                 sid = f[:-6]
@@ -1827,13 +1840,13 @@ def cmd_scan(filter_cwd=None, as_json=False):
         if not os.path.isdir(pdir):
             continue
         rows = []
-        for proj in os.listdir(pdir):
+        for proj in _listdir(pdir):
             if want and proj != want:
                 continue
             full = os.path.join(pdir, proj)
             if not os.path.isdir(full):
                 continue
-            for f in os.listdir(full):
+            for f in _listdir(full):
                 if f.endswith(".jsonl"):
                     p = os.path.join(full, f)
                     try:
@@ -1926,7 +1939,7 @@ def cmd_doctor(as_json=False):
         pdir = os.path.join(root, "projects")
         if not os.path.isdir(pdir):
             continue
-        for proj in os.listdir(pdir):
+        for proj in _listdir(pdir):
             full = os.path.join(pdir, proj)
             if not os.path.isdir(full):
                 continue
@@ -1934,7 +1947,7 @@ def cmd_doctor(as_json=False):
                 # Observer sidecar sessions churn constantly and are hidden
                 # from every other surface; counting them here buried real
                 # coverage misses under hundreds of machinery rows.
-                for f in os.listdir(full):
+                for f in _listdir(full):
                     if f.endswith(".jsonl"):
                         try:
                             if os.stat(os.path.join(full, f)).st_mtime >= day_ago:
@@ -1942,7 +1955,7 @@ def cmd_doctor(as_json=False):
                         except OSError:
                             pass
                 continue
-            for f in os.listdir(full):
+            for f in _listdir(full):
                 if not f.endswith(".jsonl"):
                     continue
                 try:
@@ -1963,7 +1976,7 @@ def cmd_doctor(as_json=False):
 
     live = crashed = hazards = corrupt = 0
     if os.path.isdir(LIVE):
-        for f in os.listdir(LIVE):
+        for f in _listdir(LIVE):
             if not f.endswith(".json"):
                 continue
             mark = _load_marker(os.path.join(LIVE, f))
