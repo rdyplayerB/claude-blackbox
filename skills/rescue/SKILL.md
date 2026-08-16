@@ -39,9 +39,11 @@ recorder" or other black-box jargon. The tool's internals stay internal.
    - crashed entries from step 1 whose `cwd` matches the current working
      directory, and
    - `"$BB" scan --cwd "$PWD" --json` (run it now; no need to ask), which
-     returns `{"sessions": [...]}`: every saved session for this project,
-     newest first, including cleanly-closed ones and ones from before
-     blackbox was installed. Same field names as step 1, so both sources are
+     returns `{"sessions": [...], "total": N, "truncated": bool}`: the
+     newest saved sessions for this project, newest first, including
+     cleanly-closed ones and ones from before blackbox was installed.
+     It is capped (25 by default) because a long-lived project can hold
+     hundreds; add `--limit N` if you need more, and never `--all`. Same field names as step 1, so both sources are
      read the same way. Entries with `"alive": true` are running right now
      (usually this very conversation) — never offer those.
    Everything from other projects does not exist as far as this conversation

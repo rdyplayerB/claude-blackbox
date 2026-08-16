@@ -23,7 +23,8 @@ Commands:
                            blackbox rescue 5ba72f4d --dangerously-skip-permissions
   blackbox flags [args]    show / set / --clear the flags every rescue adds
   blackbox scan [--json]   registry-free sweep of every known storage root
-                           --cwd <dir> narrows it to one project
+                           --cwd <dir> narrows it to one project;
+                           --json returns the newest 25 (--limit N, --all)
   blackbox salvage <id>    last resort: outline a session that never saved
   blackbox doctor [--json] is the recorder recording? hooks, errors, coverage
   blackbox root <dir>      register a storage root by hand (pre-install
@@ -45,6 +46,7 @@ ROOTS = os.path.join(STATE, "roots.json")
 RESUME_FLAGS = os.path.join(STATE, "resume-flags")
 LOG = os.path.join(STATE, "log.jsonl")
 LOG_MAX_BYTES = 5_000_000
+SCAN_JSON_LIMIT = 25
 LOG_KEEP_LINES = 2000
 
 # Session-identity markers inherited from a parent Claude session. Any of these
@@ -1880,7 +1882,7 @@ def _project_slug(cwd):
     return re.sub(r"[^A-Za-z0-9-]", "-", cwd)
 
 
-def cmd_scan(filter_cwd=None, as_json=False):
+def cmd_scan(filter_cwd=None, as_json=False, limit=None):
     """Registry-free sweep: newest transcripts in every storage root ever seen.
 
     For sessions that predate blackbox (no marker), this is how you find what
@@ -1963,7 +1965,14 @@ def cmd_scan(filter_cwd=None, as_json=False):
                  "config_dir": root, "transcript_path": p}))
     if as_json:
         out_json.sort(key=lambda r: _num(r.get("age")))
-        print(json.dumps({"sessions": out_json}, indent=2))
+        # Bounded by default. --json exists for the /rescue skill, which needs
+        # the newest handful and reads whatever it is given: one project with
+        # 600 sessions produced 795KB, around 199k tokens, to choose eight
+        # from (drilled). --limit N or --all lifts it.
+        cap = SCAN_JSON_LIMIT if limit is None else limit
+        shown = out_json if cap <= 0 else out_json[:cap]
+        print(json.dumps({"sessions": shown, "total": len(out_json),
+                          "truncated": len(shown) < len(out_json)}, indent=2))
     elif want and total_shown == 0:
         print(f"blackbox: no saved sessions found for {filter_cwd} in any known root.")
     _log("scan", roots=scanned, cwd=filter_cwd or "", json=bool(as_json))
@@ -2361,7 +2370,14 @@ def main():
         if "--cwd" in args:
             i = args.index("--cwd")
             fc = args[i + 1] if len(args) > i + 1 else os.getcwd()
-        cmd_scan(filter_cwd=fc, as_json="--json" in args)
+        lim = None
+        if "--all" in args:
+            lim = 0
+        elif "--limit" in args:
+            i = args.index("--limit")
+            lim = int(args[i + 1]) if len(args) > i + 1 and \
+                args[i + 1].isdigit() else None
+        cmd_scan(filter_cwd=fc, as_json="--json" in args, limit=lim)
     elif cmd == "salvage" and len(args) > 1:
         cmd_salvage(args[1])
     elif cmd == "doctor":
