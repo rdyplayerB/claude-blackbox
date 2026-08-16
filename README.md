@@ -240,6 +240,8 @@ blackbox flags <args>    # flags every rescue should add (set once)
 blackbox list            # just show what's rescuable
 blackbox scan [--cwd d]  # no markers needed: sweep storage roots (pre-install crashes)
 blackbox salvage <id>    # last resort for sessions that never saved
+blackbox root <dir>      # register a storage root by hand (rarely needed:
+                         # hooks register every root they see automatically)
 ```
 
 **What salvage does:** a session running with transcript saving disabled still

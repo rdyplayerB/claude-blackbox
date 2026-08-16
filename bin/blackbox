@@ -23,7 +23,11 @@ Commands:
                            blackbox rescue 5ba72f4d --dangerously-skip-permissions
   blackbox flags [args]    show / set / --clear the flags every rescue adds
   blackbox scan [--json]   registry-free sweep of every known storage root
-  blackbox doctor          is the recorder recording? hooks, errors, coverage
+                           --cwd <dir> narrows it to one project
+  blackbox salvage <id>    last resort: outline a session that never saved
+  blackbox doctor [--json] is the recorder recording? hooks, errors, coverage
+  blackbox root <dir>      register a storage root by hand (pre-install
+                           sessions; hooks register roots automatically after)
 """
 
 import json
