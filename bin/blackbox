@@ -776,6 +776,11 @@ def hook_start():
     if not sid:
         return
     os.makedirs(LIVE, exist_ok=True)
+    # Read what we already knew about this session BEFORE the sweep below
+    # deletes the evidence. The consumed .rescued marker is the only record
+    # of a rescued session's original flags, and sweeping first made that
+    # fallback dead code (drilled: flags came back empty every time).
+    known_flags = _prior_flags(sid)
     # Sweep rescue leftovers: this session's own consumed marker (a rescue
     # that just succeeded re-registers here), plus any .rescued old enough
     # that its rescue clearly wasn't rolled back.
@@ -810,7 +815,7 @@ def hook_start():
     # its own to capture — an empty capture must therefore never erase flags
     # already known for this session, or one bare relaunch loses the mode
     # permanently and every later rescue re-loses it (observed in production).
-    mark["launch_flags"] = _launch_flags(mark["pid"]) or _prior_flags(sid)
+    mark["launch_flags"] = _launch_flags(mark["pid"]) or known_flags
     _write_marker(os.path.join(LIVE, sid + ".json"), mark)
     _log("register", sid=sid[:8], cwd=cwd, has_transcript_path=bool(d.get("transcript_path")))
 
