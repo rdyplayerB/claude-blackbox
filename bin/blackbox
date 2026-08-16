@@ -799,9 +799,14 @@ def hook_start():
     # that its rescue clearly wasn't rolled back.
     try:
         for f in _listdir(LIVE):
+            p = os.path.join(LIVE, f)
             if f.endswith(".rescued"):
-                p = os.path.join(LIVE, f)
                 if f.startswith(sid) or time.time() - os.path.getmtime(p) > 7 * 86400:
+                    os.unlink(p)
+            elif f.endswith(".claim"):
+                # A successful rescue execs away without cleaning up its own
+                # claim; this session starting IS that rescue completing.
+                if f.startswith(sid) or time.time() - os.path.getmtime(p) > 3600:
                     os.unlink(p)
     except OSError:
         pass
@@ -1201,10 +1206,49 @@ def cmd_list(as_json=False, show_all=False):
     return crashed
 
 
+def _claim_rescue(sid, window=30):
+    """Claim the right to resume this session, so two terminals racing the
+    same id do not both launch claude against one transcript (drilled: three
+    simultaneous rescues produced three processes on one file).
+
+    O_EXCL is the whole mechanism. The claim is only needed for the few
+    seconds between exec and the resumed session registering its marker —
+    after that the alive check refuses on its own — so a claim older than
+    `window` is treated as abandoned. If claiming itself fails, the rescue
+    proceeds: a guard must never be the reason a recovery does not happen."""
+    p = os.path.join(LIVE, sid + ".claim")
+    try:
+        os.makedirs(LIVE, exist_ok=True)
+        os.close(os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+        return True
+    except FileExistsError:
+        try:
+            if time.time() - os.path.getmtime(p) > window:
+                os.utime(p, None)
+                return True
+        except OSError:
+            return True
+        return False
+    except OSError:
+        return True
+
+
+def _release_claim(sid):
+    try:
+        os.remove(os.path.join(LIVE, sid + ".claim"))
+    except OSError:
+        pass
+
+
 def _exec_resume(m, extra_flags=None):
     """Become the resumed session: consume any marker (reversibly), set the
     right config root, cd to the project, exec claude."""
     sid = m["session_id"]
+    if not _claim_rescue(sid):
+        print(f"blackbox: another rescue of {sid[:8]} started moments ago — "
+              "check your other terminal.")
+        print("If that one failed, try again in a few seconds.")
+        return
     flags = _resolve_flags(m, extra_flags)
     # The exec below replaces this process, so this line is the only record of
     # exactly what was launched.
@@ -1282,6 +1326,7 @@ def _exec_resume(m, extra_flags=None):
             os.replace(consumed, mp)  # restore the crash record
         except OSError:
             pass
+    _release_claim(sid)  # exec failed: let the next attempt through at once
     _log("rescue.exec", sid=sid[:8], ok=False,
          err=f"{type(last_err).__name__}: {last_err}")
     print("blackbox: could not exec `claude` (not on PATH?). Run this by hand:")
