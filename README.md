@@ -264,9 +264,11 @@ Those flags are worth a note, because the conversation is not the whole
 session: a rescue that quietly drops `--dangerously-skip-permissions` hands
 back a session that interrogates you about every command. blackbox records
 the behavior-shaping flags (permission mode, model) at session start and
-re-applies them. When a session has none of its own to record, as happens
-when it was itself started by `claude --resume`, your standing default fills
-the gap:
+re-applies them. A session with no marker of its own, which is the normal
+state for one that closed cleanly, still gets its permission mode back:
+Claude Code writes that into the transcript, so it survives in the one file
+that always outlives the session. Your standing default fills whatever is
+left:
 
 ```
 blackbox flags --dangerously-skip-permissions   # set once

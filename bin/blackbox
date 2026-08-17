@@ -1435,6 +1435,32 @@ def _cwd_from_transcript(tp):
     return HOME
 
 
+def _mode_from_transcript(tp):
+    """The permission mode Claude Code itself recorded for this session.
+
+    A cleanly-closed session usually has no marker, so its launch flags were
+    lost and a rescue fell back to the machine-wide default — the complaint
+    that started all of this. Claude Code writes `permission-mode` records
+    into the transcript, which makes the session's own mode recoverable from
+    the one file that always survives. Later records win: the mode can be
+    changed mid-session. 'default' and 'normal' are the ordinary mode and
+    need no flag."""
+    try:
+        size = os.path.getsize(tp)
+        with open(tp, "rb") as f:
+            f.seek(max(0, size - 262144))
+            text = f.read(262144).decode("utf-8", "ignore")
+    except OSError:
+        return []
+    found = re.findall(r'"permissionMode"\s*:\s*"([A-Za-z0-9_-]{1,32})"', text)
+    if not found:
+        return []
+    mode = found[-1]
+    if mode in ("default", "normal"):
+        return []
+    return ["--permission-mode", mode]
+
+
 def _session_record(root, tp, sid):
     """A resumable record for a transcript, marker or no marker.
 
@@ -1445,7 +1471,9 @@ def _session_record(root, tp, sid):
     --permission-mode, for the same crashed session."""
     m = {"session_id": sid, "cwd": _cwd_from_transcript(tp),
          "config_dir": root, "transcript_path": tp}
-    own = _prior_flags(sid)
+    # A marker's recorded argv is the most authoritative; the transcript's own
+    # permission-mode record is the fallback for sessions that never had one.
+    own = _prior_flags(sid) or _mode_from_transcript(tp)
     if own:
         m["launch_flags"] = own
     kind = _classify(tp)
