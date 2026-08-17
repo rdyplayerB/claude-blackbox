@@ -1424,9 +1424,18 @@ def _cwd_from_transcript(tp):
 
 
 def _session_record(root, tp, sid):
-    """A resumable record for a transcript, marker or no marker."""
+    """A resumable record for a transcript, marker or no marker.
+
+    When a marker DOES exist for this id, its recorded launch flags belong on
+    the record: rescue reads them, so a record built without them advertises a
+    command rescue would not run. That drift was real — scan offered a session
+    the machine-wide default while list offered the session's own
+    --permission-mode, for the same crashed session."""
     m = {"session_id": sid, "cwd": _cwd_from_transcript(tp),
          "config_dir": root, "transcript_path": tp}
+    own = _prior_flags(sid)
+    if own:
+        m["launch_flags"] = own
     kind = _classify(tp)
     if kind != "ok":
         m["unrecoverable"] = True
