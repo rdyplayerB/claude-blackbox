@@ -660,10 +660,25 @@ def cmd_salvage(target):
         print("blackbox: nothing salvageable in that transcript.")
         return
     sid = os.path.basename(path)[:-6]
+    # Say exactly how much was recovered. A genuinely not-saving session
+    # usually leaves ONE prompt stub, not a history (measured on real ones),
+    # so promising "the prompts that drove it, in order" would describe a
+    # session outline the file cannot contain — a bad thing to read at the
+    # moment you have just lost a conversation.
+    if len(prompts) > 1:
+        body = ("These are the prompts that drove it, in order, truncated at\n"
+                "~200 chars each — an outline of the work, for re-seeding a\n"
+                "new session.\n\n")
+    elif prompts:
+        body = ("Claude Code kept a single prompt stub for it, truncated at\n"
+                "~200 chars. That stub is all that exists of this session;\n"
+                "nothing further was written to disk.\n\n")
+    else:
+        body = ("Only a title was kept. No prompt text was written to disk\n"
+                "for this session.\n\n")
     doc = (f"# Salvage: {title or sid}\n\n"
            "The conversation itself was never saved (transcript saving was off).\n"
-           "These are the prompts that drove it, in order, truncated at ~200\n"
-           "chars each — the outline of the work, for re-seeding a new session.\n\n"
+           + body
            + "".join(f"{i}. {p}\n\n" for i, p in enumerate(prompts, 1)))
     out = os.path.join(STATE, "salvage", sid + ".md")
     try:
