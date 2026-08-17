@@ -562,6 +562,7 @@ def _classify(transcript_path):
     msg = re.compile(r'"type"\s*:\s*"(?:user|assistant)"')
     meta = re.compile(r'"type"\s*:\s*"(?:last-prompt|ai-title)"')
     meta_only = False
+    saw_content = False
     try:
         size = os.path.getsize(transcript_path)
         with open(transcript_path, "rb") as f:
@@ -575,8 +576,19 @@ def _classify(transcript_path):
                 return "ok"
             if meta.search(text):
                 meta_only = True
+            elif text.strip():
+                # Records we do not recognise. Claude Code's format will keep
+                # changing, and the not-saving alarm is this tool's loudest:
+                # claiming a session is unrecoverable because its records were
+                # renamed would cry wolf on EVERY session at once. So only the
+                # positively-recognised stub signature counts as not-saving;
+                # anything unfamiliar is assumed fine (drilled with invented
+                # record types).
+                saw_content = True
     except Exception:
         pass
+    if saw_content and not meta_only:
+        return "ok"
     # A file with neither messages nor metadata has nothing to offer either way.
     return "skeleton" if meta_only else "missing"
 
