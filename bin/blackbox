@@ -47,6 +47,14 @@ RESUME_FLAGS = os.path.join(STATE, "resume-flags")
 LOG = os.path.join(STATE, "log.jsonl")
 LOG_MAX_BYTES = 5_000_000
 SCAN_JSON_LIMIT = 25
+# Two floors, because the question differs. A machine-wide sweep wants signal,
+# so it skips the small transcripts that are overwhelmingly probes and aborted
+# starts. Naming a project is a request for completeness there, and measuring
+# the real corpus found five projects whose ONLY sessions sat under the sweep
+# floor: /rescue answered "nothing saved for this project" while 20-47KB of
+# real work sat on disk. One of them missed by 3KB.
+SWEEP_MIN_BYTES = 50_000
+PROJECT_MIN_BYTES = 5_000
 LOG_KEEP_LINES = 2000
 
 # Session-identity markers inherited from a parent Claude session. Any of these
@@ -1590,6 +1598,7 @@ def _recent_sessions(cwd=None, limit=5):
                 if mk is not None and _alive(mk.get("pid"), mk.get("started_at")):
                     alive_sids.add(mk["session_id"])
     want = _project_slug(os.path.abspath(cwd)) if cwd else None
+    floor = PROJECT_MIN_BYTES if want else SWEEP_MIN_BYTES
     rows = []
     for root in _all_roots():
         pdir = os.path.join(root, "projects")
@@ -1614,7 +1623,7 @@ def _recent_sessions(cwd=None, limit=5):
                     st = os.stat(tp)
                 except OSError:
                     continue
-                if st.st_size <= 50_000 and sid not in crashed:
+                if st.st_size <= floor and sid not in crashed:
                     continue  # tiny and not a known crash: noise
                 rows.append((st.st_mtime, root, tp, sid))
     rows.sort(reverse=True)
@@ -1667,6 +1676,7 @@ def _gather_boxes(cwd=None, cap=400):
                 if mk is not None and mk["session_id"] not in alive:
                     crashed_sids.add(mk["session_id"])
     want = _project_slug(os.path.abspath(cwd)) if cwd else None
+    floor = PROJECT_MIN_BYTES if want else SWEEP_MIN_BYTES
     rows = []
     for root in _all_roots():
         pdir = os.path.join(root, "projects")
@@ -1691,7 +1701,7 @@ def _gather_boxes(cwd=None, cap=400):
                     st = os.stat(tp)
                 except OSError:
                     continue
-                if st.st_size <= 50_000 and sid not in crashed_sids:
+                if st.st_size <= floor and sid not in crashed_sids:
                     continue
                 rows.append((st.st_mtime, root, tp, sid,
                              proj.split("-")[-1] or proj))
@@ -1970,6 +1980,7 @@ def cmd_scan(filter_cwd=None, as_json=False, limit=None):
     now = time.time()
     scanned = {}
     want = _project_slug(os.path.abspath(filter_cwd)) if filter_cwd else None
+    floor = PROJECT_MIN_BYTES if want else SWEEP_MIN_BYTES
     total_shown = 0
     # --json exists so the /rescue skill sees cleanly-closed sessions in the
     # SAME shape as crashed ones. Without it those entries carried no
@@ -1999,7 +2010,7 @@ def cmd_scan(filter_cwd=None, as_json=False, limit=None):
                         st = os.stat(p)
                     except OSError:
                         continue
-                    if st.st_size > 50_000:
+                    if st.st_size > floor:
                         rows.append((st.st_mtime, st.st_size, proj, f[:-6], p))
         rows.sort(reverse=True)
         label = root.replace(HOME, "~")
