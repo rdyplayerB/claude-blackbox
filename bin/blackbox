@@ -2218,6 +2218,9 @@ def cmd_doctor(as_json=False):
         if not report["blackbox"]["state_writable"]:
             print(f"    CAUSE: {STATE} is not writable — the hooks cannot record"
                   "\n    anything at all. Fix the permissions on that directory.")
+        print("    These are still resumable: `blackbox scan --cwd <project>` reads")
+        print("    transcripts directly, so it finds them. What they lack is crash")
+        print("    detection — with no marker, a death there looks like a clean exit.")
         print("    Causes: session predates install; hooks not wired for that")
         print("    CLAUDE_CONFIG_DIR; the session ran with hooks off (claude --bare,")
         print("    or a --settings file without them); or hooks failing before their")

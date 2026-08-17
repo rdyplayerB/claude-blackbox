@@ -368,8 +368,11 @@ Doctor answers four questions the log alone can't:
   root and the exact install command. (This precise hole shipped on day one
   and doctor's first run caught it.)
 - **Did anything slip past?** Transcripts that changed in the last 24h with
-  no matching log entry: sessions blackbox never saw. Pre-install sessions
-  show here until they age out; a *growing* miss count after that is a bug.
+  no matching log entry: sessions blackbox never saw. Those are still
+  resumable, since `scan` reads transcripts directly; what they lack is
+  crash detection. Pre-install sessions show here until they age out, and so
+  does anything run deliberately without hooks (`claude --bare`); a
+  *growing* miss count beyond that is a bug.
 - **What needs action now?** Live sessions flagged not-saving, crashes
   awaiting rescue.
 
