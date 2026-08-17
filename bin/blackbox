@@ -1826,6 +1826,14 @@ def _picker_ui(stdscr, state):
             cursor = 0
 
 
+def _print_nothing_found():
+    """Empty is ambiguous on a fresh install: it reads the same as broken.
+    Say which one it is, and point at the command that can tell them apart."""
+    print("blackbox: no resumable sessions found anywhere.")
+    print("Sessions show up here once Claude Code has run with blackbox wired.")
+    print("If you expected something, `blackbox doctor` checks the wiring.")
+
+
 def cmd_picker(extra_flags=None):
     """Full-screen box selection when we own a real terminal; the numbered
     prompt flow otherwise (pipes, dumb terminals, scripts)."""
@@ -1838,7 +1846,7 @@ def cmd_picker(extra_flags=None):
         rows, crashed_sids = _gather_boxes()
         scope = "all"
         if not rows:
-            print("blackbox: no resumable sessions found anywhere.")
+            _print_nothing_found()
             return
     state = {"rows": rows, "crashed": crashed_sids, "cache": {}, "scope": scope}
     import curses
@@ -1920,7 +1928,7 @@ def cmd_rescue(target=None, extra_flags=None):
             sessions = _recent_sessions(limit=10)
             showing_all = True
             if not sessions:
-                print("blackbox: no resumable sessions found anywhere.")
+                _print_nothing_found()
                 return
             _print_picker(sessions, "No sessions for this directory. "
                           "Recent sessions everywhere:")
@@ -2209,8 +2217,10 @@ def cmd_doctor(as_json=False):
             # The explicit form: installing from "a session under that root"
             # already burned one user — the pane wasn't under the root they
             # thought, enablement landed elsewhere, and doctor said fine.
-            print(f"        fix: CLAUDE_CONFIG_DIR={r} claude plugin install "
-                  f"blackbox@rdyplayerB")
+            # r is already HOME-collapsed for display; the default root needs
+            # no env prefix, and printing one invites cargo-culting it.
+            pre = "" if r == "~/.claude" else f"CLAUDE_CONFIG_DIR={r} "
+            print(f"        fix: {pre}claude plugin install blackbox@rdyplayerB")
             print(f"        (or, from a clone: ./install.sh {r})")
     else:
         print("  ✓ every known root has hooks wired")
@@ -2264,8 +2274,11 @@ def cmd_doctor(as_json=False):
         print("    first log line. A session run deliberately without hooks will")
         print("    always appear here, and is nothing to fix.")
     else:
-        print(f"  ✓ coverage: all {cov['recorded']} active session(s) in 24h "
-              f"were recorded{mach}")
+        if cov["recorded"]:
+            print(f"  ✓ coverage: all {cov['recorded']} active session(s) in 24h "
+                  f"were recorded{mach}")
+        else:
+            print(f"  ✓ coverage: no sessions were active in the last 24h{mach}")
     print(f"  log: {LOG} ({len(log)} lines)")
 
 
