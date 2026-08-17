@@ -2218,8 +2218,11 @@ def cmd_doctor(as_json=False):
         if not report["blackbox"]["state_writable"]:
             print(f"    CAUSE: {STATE} is not writable — the hooks cannot record"
                   "\n    anything at all. Fix the permissions on that directory.")
-        print("    Causes: session predates install, hooks not wired for that")
-        print("    CLAUDE_CONFIG_DIR, or hooks failing before their first log line.")
+        print("    Causes: session predates install; hooks not wired for that")
+        print("    CLAUDE_CONFIG_DIR; the session ran with hooks off (claude --bare,")
+        print("    or a --settings file without them); or hooks failing before their")
+        print("    first log line. A session run deliberately without hooks will")
+        print("    always appear here, and is nothing to fix.")
     else:
         print(f"  ✓ coverage: all {cov['recorded']} active session(s) in 24h "
               f"were recorded{mach}")
