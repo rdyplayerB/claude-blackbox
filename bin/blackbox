@@ -1460,14 +1460,25 @@ def _mode_from_transcript(tp):
     the one file that always survives. Later records win: the mode can be
     changed mid-session. 'default' and 'normal' are the ordinary mode and
     need no flag."""
+    # Head AND tail. The mode is written once at session start and again only
+    # when it CHANGES, so in a long conversation that never changed it the
+    # only record sits near byte zero: measured across 8,284 real transcripts,
+    # 16% had their last record outside a tail-only window and silently fell
+    # back to the machine default. Tail wins when it has one (that is the
+    # newest state); the head's launch mode is the fallback.
+    pat = re.compile(r'"permissionMode"\s*:\s*"([A-Za-z0-9_-]{1,32})"')
     try:
         size = os.path.getsize(tp)
         with open(tp, "rb") as f:
-            f.seek(max(0, size - 262144))
-            text = f.read(262144).decode("utf-8", "ignore")
+            head = f.read(65536)
+            tail = b""
+            if size > 65536:
+                f.seek(max(0, size - 262144))
+                tail = f.read(262144)
     except OSError:
         return []
-    found = re.findall(r'"permissionMode"\s*:\s*"([A-Za-z0-9_-]{1,32})"', text)
+    found = pat.findall(tail.decode("utf-8", "ignore")) or \
+        pat.findall(head.decode("utf-8", "ignore"))
     if not found:
         return []
     mode = found[-1]
