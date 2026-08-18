@@ -809,14 +809,24 @@ def _read_text(path):
 
 
 def _resolve_flags(mark, explicit=None):
-    """Which flags a resume should carry, most specific first:
-    what you typed on this command line, then what the session itself ran
-    with, then your standing default. Typed flags are trusted verbatim (you
-    are holding the keyboard); flags read from a marker file are filtered."""
+    """Which flags a resume should carry, most specific first: what you typed
+    on this command line, then the argv the session was launched with, then
+    the permission mode Claude Code recorded inside its transcript, then your
+    standing default. Typed flags are trusted verbatim (you are holding the
+    keyboard); flags read from a marker file are filtered.
+
+    The transcript step lives HERE rather than in one caller, because it did
+    live in one caller: crashed sessions build their record straight from the
+    marker, so markers written before flag capture existed skipped it, and
+    five of six real crashes on this machine were offered the machine default
+    while their own mode sat in the transcript."""
     if explicit:
         return list(explicit)
     own = _filter_launch_flags(mark.get("launch_flags", []))
-    return own or _default_flags()
+    if own:
+        return own
+    tp = mark.get("transcript_path", "")
+    return (_mode_from_transcript(tp) if tp else []) or _default_flags()
 
 
 def _resume_cmd(mark):
