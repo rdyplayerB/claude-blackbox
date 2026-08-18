@@ -646,21 +646,25 @@ def _salvage(transcript_path):
 
 
 def cmd_salvage(target):
-    # Accept a path or a bare session id searched across every known root.
+    # A path, or a session id — full or an unambiguous prefix, resolved the
+    # same way rescue resolves one. It used to demand the exact filename, so
+    # the 8 characters shown everywhere else in this tool produced "no
+    # transcript found" from the one command you reach for after learning a
+    # conversation was never saved.
     path = target if os.path.exists(target) else None
     if not path:
-        for root in _all_roots():
-            pdir = os.path.join(root, "projects")
-            if not os.path.isdir(pdir):
-                continue
-            for proj in _listdir(pdir):
-                p = os.path.join(pdir, proj, target + ".jsonl")
-                if os.path.exists(p):
-                    path = p
-                    break
-            if path:
-                break
-    if not path:
+        matches, truncated = _find_session_anywhere(target)
+        if len(matches) > 1:
+            print(f"blackbox: {target!r} is ambiguous — "
+                  f"{len(matches)}{'+' if truncated else ''} sessions match:")
+            for m in matches[:7]:
+                print(f"  {m['session_id']}  "
+                      f"{m.get('cwd', '?').replace(HOME, '~')}")
+            print("Give more of the id.")
+            return
+        if matches:
+            path = matches[0].get("transcript_path")
+    if not path or not os.path.exists(path):
         print(f"blackbox: no transcript found for {target!r}")
         return
     title, prompts = _salvage(path)
