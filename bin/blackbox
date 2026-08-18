@@ -1319,6 +1319,17 @@ def _exec_resume(m, extra_flags=None):
     """Become the resumed session: consume any marker (reversibly), set the
     right config root, cd to the project, exec claude."""
     sid = m["session_id"]
+    # Last look before the point of no return. Every caller decided this
+    # session was dead at the moment it built its list, and a picker row can
+    # sit on screen for minutes — long enough for someone else to rescue it,
+    # or for the session to come back on its own. Resuming a LIVE session
+    # puts two claudes on one transcript, which is the file this tool exists
+    # to protect, so the check belongs here rather than in each caller (the
+    # rescue-claim only covers the seconds around a simultaneous attempt).
+    if sid in _alive_marker_sids():
+        print(f"blackbox: session {sid[:8]} is RUNNING right now — nothing to "
+              "rescue. Find its window, or wait for it to exit.")
+        return
     if not _claim_rescue(sid):
         print(f"blackbox: another rescue of {sid[:8]} started moments ago — "
               "check your other terminal.")
